@@ -52,6 +52,10 @@ class ImageResizer:
             new_height = height
             new_width = int(height * self.target_ratio)
         
+        # Ensure dimensions are divisible by 8 (required for SDXL)
+        new_width = ((new_width + 7) // 8) * 8
+        new_height = ((new_height + 7) // 8) * 8
+        
         return new_width, new_height
     
     def create_extension_mask(self, original_img: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
