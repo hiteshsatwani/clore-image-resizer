@@ -39,6 +39,25 @@ class ImageResizer:
         
         print("Models loaded successfully!")
     
+    def scale_to_1080p(self, image: Image.Image) -> Image.Image:
+        """Scale image down to 1080p (1920x1080) if larger, maintaining aspect ratio."""
+        width, height = image.size
+        max_1080p_width = 1920
+        max_1080p_height = 1080
+        
+        # Check if image is already smaller than 1080p
+        if width <= max_1080p_width and height <= max_1080p_height:
+            return image
+        
+        # Calculate scale factor to fit within 1080p bounds
+        scale_factor = min(max_1080p_width / width, max_1080p_height / height)
+        
+        new_width = int(width * scale_factor)
+        new_height = int(height * scale_factor)
+        
+        print(f"Scaling from {width}x{height} to {new_width}x{new_height} (1080p max)")
+        return image.resize((new_width, new_height), Image.LANCZOS)
+    
     def calculate_target_dimensions(self, width: int, height: int) -> Tuple[int, int]:
         """Calculate target dimensions for 9:16 aspect ratio."""
         current_ratio = width / height
@@ -130,19 +149,23 @@ class ImageResizer:
             
             print(f"Original size: {orig_width}x{orig_height}")
             
-            # Calculate target dimensions
-            target_width, target_height = self.calculate_target_dimensions(orig_width, orig_height)
+            # First scale to 1080p if needed
+            scaled_img = self.scale_to_1080p(original_img)
+            scaled_width, scaled_height = scaled_img.size
+            
+            # Calculate target dimensions based on scaled image
+            target_width, target_height = self.calculate_target_dimensions(scaled_width, scaled_height)
             print(f"Target size: {target_width}x{target_height}")
             
             # Check if already correct ratio
-            if orig_width == target_width and orig_height == target_height:
+            if scaled_width == target_width and scaled_height == target_height:
                 print("Image already has correct aspect ratio")
-                original_img.save(output_path, quality=95)
+                scaled_img.save(output_path, quality=95)
                 return True
             
-            # Create base canvas and mask
-            base_canvas = self.create_base_canvas(original_img, (target_width, target_height))
-            mask = self.create_extension_mask(original_img, (target_width, target_height))
+            # Create base canvas and mask using scaled image
+            base_canvas = self.create_base_canvas(scaled_img, (target_width, target_height))
+            mask = self.create_extension_mask(scaled_img, (target_width, target_height))
             
             # Generate inpainting prompt
             prompt = self.generate_inpaint_prompt()
