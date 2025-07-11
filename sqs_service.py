@@ -58,7 +58,7 @@ class SQSService:
                 QueueUrl=self.queue_url,
                 MaxNumberOfMessages=min(max_messages, 10),  # SQS limit is 10
                 WaitTimeSeconds=20,  # Long polling
-                VisibilityTimeoutSeconds=self.visibility_timeout,
+                VisibilityTimeout=self.visibility_timeout,
                 MessageAttributeNames=['All']
             )
             
