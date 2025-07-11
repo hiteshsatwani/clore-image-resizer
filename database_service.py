@@ -61,7 +61,7 @@ class DatabaseService:
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT product_id, images FROM products WHERE product_id = %s",
+                    "SELECT productid, images FROM products WHERE productid = %s",
                     (product_id,)
                 )
                 result = cursor.fetchone()
@@ -82,7 +82,7 @@ class DatabaseService:
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "UPDATE products SET images = %s WHERE product_id = %s",
+                    "UPDATE products SET images = %s WHERE productid = %s",
                     (new_images, product_id)
                 )
                 
@@ -122,7 +122,7 @@ class DatabaseService:
                 
                 # Update original images
                 cursor.execute(
-                    "UPDATE products SET original_images = %s WHERE product_id = %s",
+                    "UPDATE products SET original_images = %s WHERE productid = %s",
                     (original_images, product_id)
                 )
                 
@@ -159,7 +159,7 @@ class DatabaseService:
                     conn.commit()
                 
                 cursor.execute(
-                    "SELECT processing_status FROM products WHERE product_id = %s",
+                    "SELECT processing_status FROM products WHERE productid = %s",
                     (product_id,)
                 )
                 result = cursor.fetchone()
@@ -174,7 +174,7 @@ class DatabaseService:
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "UPDATE products SET processing_status = %s WHERE product_id = %s",
+                    "UPDATE products SET processing_status = %s WHERE productid = %s",
                     (status, product_id)
                 )
                 
@@ -221,7 +221,7 @@ class DatabaseService:
                 cursor.execute("""
                     UPDATE products 
                     SET tags = %s, gender = %s, category = %s 
-                    WHERE product_id = %s
+                    WHERE productid = %s
                 """, (tags, gender, category, product_id))
                 
                 if cursor.rowcount > 0:
