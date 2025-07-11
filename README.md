@@ -1,57 +1,26 @@
-# AI Image Resizer
+# Clore Image Processing Pipeline
 
-High-performance CLI tool for resizing images to 9:16 aspect ratio using advanced AI inpainting techniques.
+Simple image processing system that converts product images to 9:16 aspect ratio using AI.
 
-## Features
+## Files
+- `pipeline_orchestrator.py` - Main application
+- `image_resizer.py` - AI image processing
+- `database_service.py` - Database operations
+- `sqs_service.py` - SQS message handling
+- `s3_service.py` - S3 upload/download
+- `config.py` - Configuration management
+- `logger.py` - Logging
+- `requirements-production.txt` - Dependencies
+- `SIMPLE_DEPLOYMENT.md` - Setup instructions
+- `SIMPLE_OPERATIONS.md` - Weekly workflow
 
-- **AI-powered extension**: Uses Stable Diffusion XL for realistic image extension
-- **Smart aspect ratio handling**: Automatically calculates optimal dimensions
-- **Context-aware inpainting**: Generates seamless extensions based on image content
-- **Batch processing**: Process multiple images at once
-- **GPU optimized**: Designed for A100 40GB VRAM with memory efficiency
-- **Fast processing**: 1-5 second processing time per image
+## Quick Start
 
-## Installation
+1. Follow `SIMPLE_DEPLOYMENT.md` to set up AWS infrastructure
+2. Use `SIMPLE_OPERATIONS.md` for weekly operations
+3. Start instance → SSH → Run script → Stop instance
 
-```bash
-pip install -r requirements.txt
-```
-
-## Usage
-
-### Single Image
-```bash
-python image_resizer.py input.jpg -o output.jpg
-```
-
-### Batch Processing
-```bash
-python image_resizer.py /path/to/images/ -b -o /path/to/output/
-```
-
-### Options
-- `-o, --output`: Output path or directory
-- `-d, --device`: Device to use (cuda/cpu, default: cuda)
-- `-b, --batch`: Enable batch processing for directories
-- `-q, --quiet`: Suppress output messages
-
-## Performance
-
-- **Target processing time**: 1-5 seconds per image on A100 40GB
-- **Memory efficient**: Uses model CPU offloading and VAE slicing
-- **Optimized inference**: 20 inference steps for speed/quality balance
-
-## Technical Details
-
-- **Primary model**: Stable Diffusion XL Inpainting
-- **Depth estimation**: Intel DPT-Large for content analysis
-- **Image processing**: PIL with LANCZOS resampling
-- **Target aspect ratio**: 9:16 (vertical)
-- **Processing resolution**: 1024x1024 for optimal SDXL performance
-
-## Requirements
-
-- Python 3.8+
-- CUDA-compatible GPU (A100 recommended)
-- 8GB+ VRAM minimum (40GB recommended)
-- PyTorch 2.0+
+## Cost
+- **g5.2xlarge**: $1.21/hour
+- **Processing time**: 7-9 hours for 2000-3000 products
+- **Cost per session**: ~$8.50-11

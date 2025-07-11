@@ -1,0 +1,28 @@
+[Unit]
+Description=Clore Image Processing Service
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/image-processor
+ExecStart=/usr/bin/python3 pipeline_orchestrator.py
+Restart=always
+RestartSec=10
+
+# Environment variables
+Environment=PYTHONPATH=/home/ec2-user/image-processor
+EnvironmentFile=/home/ec2-user/image-processor/.env
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=image-processor
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=60G
+
+[Install]
+WantedBy=multi-user.target
