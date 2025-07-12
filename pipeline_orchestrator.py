@@ -58,12 +58,73 @@ class PipelineOrchestrator:
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         self.running = False
     
+    def _format_category(self, category: str) -> str:
+        """Format category for frontend display."""
+        if not category or category == "unknown":
+            return "Unknown"
+        
+        # Replace underscores with spaces and title case
+        formatted = category.replace("_", " ").title()
+        
+        # Handle special cases for better formatting
+        special_cases = {
+            "Oversized Tee": "Oversized Tee",
+            "Graphic Tee": "Graphic Tee",
+            "Cropped Hoodie": "Cropped Hoodie",
+            "Oversized Hoodie": "Oversized Hoodie",
+            "Zip Hoodie": "Zip Hoodie",
+            "Baggy Jeans": "Baggy Jeans",
+            "Skinny Jeans": "Skinny Jeans",
+            "Cargo Pants": "Cargo Pants",
+            "Wide Leg Pants": "Wide Leg Pants",
+            "Bomber Jacket": "Bomber Jacket",
+            "Denim Jacket": "Denim Jacket",
+            "Puffer Jacket": "Puffer Jacket",
+            "Coach Jacket": "Coach Jacket",
+            "Chunky Sneakers": "Chunky Sneakers",
+            "High Tops": "High Tops",
+            "Skate Shoes": "Skate Shoes",
+            "Bucket Hat": "Bucket Hat",
+            "Crossbody Bag": "Crossbody Bag",
+            "Chain Necklace": "Chain Necklace"
+        }
+        
+        return special_cases.get(formatted, formatted)
+    
+    def _format_gender(self, gender: str) -> str:
+        """Format gender for frontend display."""
+        if not gender:
+            return "Unisex"
+        
+        gender_mapping = {
+            "male": "Male",
+            "female": "Female", 
+            "unisex": "Unisex",
+            "men": "Male",
+            "women": "Female",
+            "mens": "Male",
+            "womens": "Female"
+        }
+        
+        return gender_mapping.get(gender.lower(), "Unisex")
+    
     def process_product(self, message: ProcessingMessage) -> ProcessingResult:
         """Process a single product."""
         start_time = time.time()
         
         try:
             logger.info("Processing product", product_id=message.product_id)
+            
+            # Check if product is already finished
+            current_status = self.db_service.get_processing_status(message.product_id)
+            if current_status == "completed":
+                logger.info("Product already completed, skipping", product_id=message.product_id)
+                return ProcessingResult(
+                    product_id=message.product_id,
+                    success=True,
+                    processed_images=0,
+                    processing_time=time.time() - start_time
+                )
             
             # Update processing status
             self.db_service.update_processing_status(message.product_id, "processing")
@@ -214,8 +275,12 @@ class PipelineOrchestrator:
                 if "error" not in tag_result:
                     consensus = tag_result["consensus"]
                     tags = consensus.get("comprehensive_tags", [])
-                    gender = consensus.get("consensus_gender", "unisex")
-                    category = consensus.get("consensus_category", "unknown")
+                    raw_gender = consensus.get("consensus_gender", "unisex")
+                    raw_category = consensus.get("consensus_category", "unknown")
+                    
+                    # Format for frontend display
+                    gender = self._format_gender(raw_gender)
+                    category = self._format_category(raw_category)
                     
                     # Update database with tags
                     self.db_service.update_product_tags(message.product_id, tags, gender, category)
@@ -319,12 +384,16 @@ class PipelineOrchestrator:
                 # Log batch results
                 successful = sum(1 for r in results if r.success)
                 failed = len(results) - successful
+                skipped = sum(1 for r in results if r.success and r.processed_images == 0)
+                actually_processed = sum(1 for r in results if r.success and r.processed_images > 0)
                 
                 logger.info(
                     "Batch processing completed",
                     batch_size=len(results),
                     successful=successful,
                     failed=failed,
+                    skipped=skipped,
+                    actually_processed=actually_processed,
                     total_processed=self.processed_count,
                     total_failed=self.failed_count
                 )
