@@ -79,7 +79,7 @@ class ImageResizer:
         return new_width, new_height
     
     def create_extension_mask(self, original_img: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
-        """Create mask for areas that need to be inpainted with feathered edges."""
+        """Create mask for areas that need to be inpainted with protected original area."""
         target_width, target_height = target_size
         orig_width, orig_height = original_img.size
         
@@ -90,13 +90,23 @@ class ImageResizer:
         x_offset = (target_width - orig_width) // 2
         y_offset = (target_height - orig_height) // 2
         
-        # Black out the original image area (don't inpaint)
-        mask.paste(0, (x_offset, y_offset, x_offset + orig_width, y_offset + orig_height))
+        # Create a buffer zone around the original image to ensure no AI processing
+        buffer_size = 5  # 5 pixel buffer
+        protected_x1 = max(0, x_offset - buffer_size)
+        protected_y1 = max(0, y_offset - buffer_size)
+        protected_x2 = min(target_width, x_offset + orig_width + buffer_size)
+        protected_y2 = min(target_height, y_offset + orig_height + buffer_size)
         
-        # Apply feathering to mask edges for better blending
-        mask = mask.filter(ImageFilter.GaussianBlur(radius=2))
+        # Black out the protected area (don't inpaint)
+        mask.paste(0, (protected_x1, protected_y1, protected_x2, protected_y2))
         
-        return mask
+        # Apply feathering only to the outer edges, not the protected area
+        feathered_mask = mask.filter(ImageFilter.GaussianBlur(radius=2))
+        
+        # Restore the hard protected area to ensure original content is never touched
+        feathered_mask.paste(0, (protected_x1, protected_y1, protected_x2, protected_y2))
+        
+        return feathered_mask
     
     def create_base_canvas(self, original_img: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
         """Create base canvas with original image centered."""
@@ -161,6 +171,73 @@ class ImageResizer:
         
         return final_result
     
+    def validate_original_preservation(self, final_result: Image.Image, original_img: Image.Image, target_size: Tuple[int, int]) -> bool:
+        """Validate that the original image content is perfectly preserved."""
+        target_width, target_height = target_size
+        orig_width, orig_height = original_img.size
+        
+        # Calculate centering position
+        x_offset = (target_width - orig_width) // 2
+        y_offset = (target_height - orig_height) // 2
+        
+        # Extract the original area from the final result
+        extracted_area = final_result.crop((x_offset, y_offset, x_offset + orig_width, y_offset + orig_height))
+        
+        # Convert both images to numpy arrays for comparison
+        original_array = np.array(original_img)
+        extracted_array = np.array(extracted_area)
+        
+        # Check if they are identical
+        are_identical = np.array_equal(original_array, extracted_array)
+        
+        if not are_identical:
+            print("WARNING: Original content was modified during processing!")
+            # Calculate difference percentage
+            diff_pixels = np.sum(original_array != extracted_array)
+            total_pixels = original_array.size
+            diff_percentage = (diff_pixels / total_pixels) * 100
+            print(f"Difference: {diff_percentage:.2f}% of pixels modified")
+        
+        return are_identical
+    
+    def create_composite_image(self, original_img: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
+        """Create a composite image with original content isolated from AI processing."""
+        target_width, target_height = target_size
+        orig_width, orig_height = original_img.size
+        
+        # Calculate centering position
+        x_offset = (target_width - orig_width) // 2
+        y_offset = (target_height - orig_height) // 2
+        
+        # Create base canvas with neutral background
+        canvas = Image.new('RGB', target_size, (128, 128, 128))
+        
+        # Only add edge extension for context, not the original image
+        if x_offset > 0:  # Need to extend horizontally
+            # Left edge
+            left_edge = original_img.crop((0, 0, min(10, orig_width), orig_height))
+            left_edge = left_edge.resize((x_offset, orig_height), Image.LANCZOS)
+            canvas.paste(left_edge, (0, y_offset))
+            
+            # Right edge
+            right_edge = original_img.crop((max(0, orig_width-10), 0, orig_width, orig_height))
+            right_edge = right_edge.resize((x_offset, orig_height), Image.LANCZOS)
+            canvas.paste(right_edge, (x_offset + orig_width, y_offset))
+        
+        if y_offset > 0:  # Need to extend vertically
+            # Top edge
+            top_edge = original_img.crop((0, 0, orig_width, min(10, orig_height)))
+            top_edge = top_edge.resize((orig_width, y_offset), Image.LANCZOS)
+            canvas.paste(top_edge, (x_offset, 0))
+            
+            # Bottom edge
+            bottom_edge = original_img.crop((0, max(0, orig_height-10), orig_width, orig_height))
+            bottom_edge = bottom_edge.resize((orig_width, y_offset), Image.LANCZOS)
+            canvas.paste(bottom_edge, (x_offset, y_offset + orig_height))
+        
+        # Do NOT paste the original image here - it will be added after AI processing
+        return canvas
+    
     def resize_image(self, image_path: str, output_path: str) -> bool:
         """Resize image to 9:16 aspect ratio using AI inpainting."""
         try:
@@ -185,7 +262,7 @@ class ImageResizer:
                 return True
             
             # Create base canvas and mask using scaled image
-            base_canvas = self.create_base_canvas(scaled_img, (target_width, target_height))
+            base_canvas = self.create_composite_image(scaled_img, (target_width, target_height))
             mask = self.create_extension_mask(scaled_img, (target_width, target_height))
             
             # Generate inpainting prompt
@@ -208,14 +285,14 @@ class ImageResizer:
             
             print("Running AI inpainting...")
             
-            # Run inpainting with reduced strength to minimize impact on original content
+            # Run inpainting with very low strength to only generate extensions
             result = self.inpaint_pipeline(
                 prompt=prompt,
                 image=base_resized,
                 mask_image=mask_resized,
-                num_inference_steps=20,  # Reduced for speed
-                strength=0.4,  # Reduced from 0.8 to minimize content modification
-                guidance_scale=7.5,
+                num_inference_steps=25,  # Slightly increased for better quality
+                strength=0.9,  # Higher strength is OK since original area is protected by mask
+                guidance_scale=8.0,  # Slightly higher for better adherence to prompt
                 height=process_height,
                 width=process_width
             ).images[0]
@@ -226,6 +303,11 @@ class ImageResizer:
             
             # Preserve original content by pasting it back onto the AI result
             final_result = self.preserve_original_content(result, scaled_img, (target_width, target_height))
+            
+            # Validate that original content is preserved
+            is_preserved = self.validate_original_preservation(final_result, scaled_img, (target_width, target_height))
+            if is_preserved:
+                print("✓ Original content successfully preserved")
             
             # Save result
             final_result.save(output_path, quality=95)
