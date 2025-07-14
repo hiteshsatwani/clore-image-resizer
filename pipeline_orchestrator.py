@@ -8,6 +8,8 @@ from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import gc
+import threading
+from datetime import datetime, timedelta
 
 from config import config
 from logger import logger
@@ -45,11 +47,23 @@ class PipelineOrchestrator:
         self.running = True
         self.processed_count = 0
         self.failed_count = 0
+        self.skipped_count = 0
+        self.total_images_processed = 0
+        self.current_product_id = None
+        self.current_stage = "Initializing"
+        self.current_batch_size = 0
+        self.current_batch_progress = 0
+        self.recent_processing_times = []
+        self.last_activity = time.time()
         self.start_time = time.time()
         
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        # Start UI update thread
+        self.ui_thread = threading.Thread(target=self._update_ui, daemon=True)
+        self.ui_thread.start()
         
         logger.info("Pipeline orchestrator initialized")
     
@@ -57,6 +71,145 @@ class PipelineOrchestrator:
         """Handle shutdown signals."""
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         self.running = False
+    
+    def _clear_screen(self):
+        """Clear the terminal screen."""
+        os.system('clear' if os.name == 'posix' else 'cls')
+    
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration in human readable format."""
+        if seconds < 60:
+            return f"{seconds:.0f}s"
+        elif seconds < 3600:
+            minutes = seconds // 60
+            secs = seconds % 60
+            return f"{minutes:.0f}m {secs:.0f}s"
+        else:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{hours:.0f}h {minutes:.0f}m"
+    
+    def _get_progress_bar(self, current: int, total: int, width: int = 50) -> str:
+        """Generate a progress bar."""
+        if total == 0:
+            return "█" * width
+        
+        filled = int(width * current / total)
+        bar = "█" * filled + "░" * (width - filled)
+        percentage = (current / total) * 100 if total > 0 else 0
+        return f"{bar} {percentage:.1f}%"
+    
+    def _get_speed_stats(self) -> tuple:
+        """Get current processing speed statistics."""
+        if not self.recent_processing_times:
+            return 0.0, 0.0, "0s"
+        
+        avg_time = sum(self.recent_processing_times) / len(self.recent_processing_times)
+        current_speed = 1 / avg_time if avg_time > 0 else 0
+        
+        total_processed = self.processed_count + self.failed_count
+        if total_processed > 0:
+            total_time = time.time() - self.start_time
+            overall_speed = total_processed / total_time
+        else:
+            overall_speed = 0
+        
+        # Estimate time remaining
+        queue_depth = self.sqs_service.get_queue_depth()
+        if current_speed > 0 and queue_depth > 0:
+            eta_seconds = queue_depth / current_speed
+            eta = self._format_duration(eta_seconds)
+        else:
+            eta = "Unknown"
+        
+        return current_speed, overall_speed, eta
+    
+    def _update_ui(self):
+        """Update the terminal UI continuously."""
+        while self.running:
+            try:
+                self._clear_screen()
+                
+                # Header
+                print("🚀 CLORE IMAGE PROCESSING PIPELINE")
+                print("=" * 80)
+                
+                # Status section
+                uptime = time.time() - self.start_time
+                queue_depth = self.sqs_service.get_queue_depth()
+                in_flight = self.sqs_service.get_in_flight_messages()
+                
+                status_color = "🟢" if self.running else "🔴"
+                print(f"\n{status_color} Status: {'RUNNING' if self.running else 'STOPPED'}")
+                print(f"⏱️  Uptime: {self._format_duration(uptime)}")
+                print(f"📊 Queue Depth: {queue_depth}")
+                print(f"✈️  In Flight: {in_flight}")
+                
+                # Processing statistics
+                print(f"\n📈 PROCESSING STATISTICS")
+                print("-" * 40)
+                
+                total_processed = self.processed_count + self.failed_count + self.skipped_count
+                success_rate = (self.processed_count / max(total_processed, 1)) * 100
+                
+                print(f"✅ Successful: {self.processed_count}")
+                print(f"❌ Failed: {self.failed_count}")
+                print(f"⏭️  Skipped: {self.skipped_count}")
+                print(f"🖼️  Images Processed: {self.total_images_processed}")
+                print(f"📊 Success Rate: {success_rate:.1f}%")
+                
+                # Speed statistics
+                current_speed, overall_speed, eta = self._get_speed_stats()
+                print(f"\n⚡ PERFORMANCE")
+                print("-" * 40)
+                print(f"Current Speed: {current_speed:.2f} products/min")
+                print(f"Overall Speed: {overall_speed:.2f} products/min")
+                print(f"ETA: {eta}")
+                
+                # Current activity
+                print(f"\n🔄 CURRENT ACTIVITY")
+                print("-" * 40)
+                
+                if self.current_product_id:
+                    print(f"Product: {self.current_product_id[:8]}...")
+                    print(f"Stage: {self.current_stage}")
+                    
+                    if self.current_batch_size > 0:
+                        progress_bar = self._get_progress_bar(
+                            self.current_batch_progress, 
+                            self.current_batch_size
+                        )
+                        print(f"Batch Progress: {progress_bar}")
+                        print(f"({self.current_batch_progress}/{self.current_batch_size})")
+                else:
+                    if queue_depth == 0:
+                        print("⏳ Waiting for new messages...")
+                    else:
+                        print("🔍 Checking queue...")
+                
+                # Recent activity
+                time_since_activity = time.time() - self.last_activity
+                if time_since_activity < 60:
+                    print(f"Last activity: {time_since_activity:.0f}s ago")
+                else:
+                    print(f"Last activity: {self._format_duration(time_since_activity)} ago")
+                
+                # Bottom status bar
+                print(f"\n{'=' * 80}")
+                print(f"💡 Press Ctrl+C to stop gracefully")
+                
+                time.sleep(2)  # Update every 2 seconds
+                
+            except Exception as e:
+                # Don't let UI errors crash the main process
+                time.sleep(5)
+    
+    def _update_current_stage(self, stage: str, product_id: str = None):
+        """Update current processing stage."""
+        self.current_stage = stage
+        if product_id:
+            self.current_product_id = product_id
+        self.last_activity = time.time()
     
     def _format_category(self, category: str) -> str:
         """Format category for frontend display."""
@@ -113,12 +266,14 @@ class PipelineOrchestrator:
         start_time = time.time()
         
         try:
+            self._update_current_stage("Checking product status", message.product_id)
             logger.info("Processing product", product_id=message.product_id)
             
             # Check if product is already finished
             current_status = self.db_service.get_processing_status(message.product_id)
             if current_status == "completed":
                 logger.info("Product already completed, skipping", product_id=message.product_id)
+                self.skipped_count += 1
                 return ProcessingResult(
                     product_id=message.product_id,
                     success=True,
@@ -127,9 +282,11 @@ class PipelineOrchestrator:
                 )
             
             # Update processing status
+            self._update_current_stage("Updating database status", message.product_id)
             self.db_service.update_processing_status(message.product_id, "processing")
             
             # Get product from database
+            self._update_current_stage("Fetching product data", message.product_id)
             product = self.db_service.get_product_images(message.product_id)
             if not product:
                 logger.warning("Product not found in database", product_id=message.product_id)
@@ -150,9 +307,11 @@ class PipelineOrchestrator:
                 )
             
             # Backup original images
+            self._update_current_stage("Backing up original images", message.product_id)
             self.db_service.backup_original_images(message.product_id, product.images)
             
             # Download images
+            self._update_current_stage(f"Downloading {len(product.images)} images", message.product_id)
             logger.info("Downloading images", product_id=message.product_id, image_count=len(product.images))
             downloaded_images = self.s3_service.download_batch_images(product.images)
             
@@ -176,11 +335,14 @@ class PipelineOrchestrator:
                 )
             
             # Process images with AI resizer
+            self._update_current_stage(f"AI processing {len(valid_images)} images", message.product_id)
             logger.info("Processing images with AI", product_id=message.product_id, image_count=len(valid_images))
             processed_images = []
             
             for i, image in enumerate(valid_images):
                 try:
+                    self._update_current_stage(f"AI processing image {i+1}/{len(valid_images)}", message.product_id)
+                    
                     # Scale to 1080p first
                     scaled_image = self.image_resizer.scale_to_1080p(image)
                     
@@ -250,15 +412,18 @@ class PipelineOrchestrator:
                     processed_images.append(valid_images[i])
             
             # Upload processed images to S3
+            self._update_current_stage(f"Uploading {len(processed_images)} images to S3", message.product_id)
             logger.info("Uploading processed images", product_id=message.product_id, image_count=len(processed_images))
             s3_urls = self.s3_service.upload_batch_images(processed_images, message.product_id, valid_urls)
             
             # Update database with new URLs
+            self._update_current_stage("Updating database with new URLs", message.product_id)
             logger.info("Updating database with new URLs", product_id=message.product_id)
             self.db_service.update_product_images(message.product_id, s3_urls)
             
             # Tag the processed images
             try:
+                self._update_current_stage("AI tagging processed images", message.product_id)
                 logger.info("Tagging processed images", product_id=message.product_id)
                 
                 # Download processed images for tagging
@@ -302,9 +467,18 @@ class PipelineOrchestrator:
             except Exception as e:
                 logger.error("Error during tagging", product_id=message.product_id, error=str(e))
             
+            self._update_current_stage("Finalizing product", message.product_id)
             self.db_service.update_processing_status(message.product_id, "completed")
             
             processing_time = time.time() - start_time
+            
+            # Update tracking stats
+            self.total_images_processed += len(processed_images)
+            self.recent_processing_times.append(processing_time)
+            
+            # Keep only recent times for speed calculation
+            if len(self.recent_processing_times) > 20:
+                self.recent_processing_times = self.recent_processing_times[-20:]
             
             logger.info(
                 "Product processing completed",
@@ -338,10 +512,15 @@ class PipelineOrchestrator:
         """Process a batch of messages."""
         results = []
         
-        for message in messages:
+        # Set up batch tracking
+        self.current_batch_size = len(messages)
+        self.current_batch_progress = 0
+        
+        for i, message in enumerate(messages):
             if not self.running:
                 break
-                
+            
+            self.current_batch_progress = i + 1
             result = self.process_product(message)
             results.append(result)
             
@@ -353,27 +532,36 @@ class PipelineOrchestrator:
                 self.failed_count += 1
                 # Keep message in queue for retry (will be retried after visibility timeout)
         
+        # Reset batch tracking
+        self.current_batch_size = 0
+        self.current_batch_progress = 0
+        self.current_product_id = None
+        
         return results
     
     def run(self):
         """Main processing loop."""
         logger.info("Starting pipeline orchestrator")
+        self._update_current_stage("Starting up")
         
         while self.running:
             try:
                 # Check queue depth
                 queue_depth = self.sqs_service.get_queue_depth()
                 if queue_depth == 0:
+                    self._update_current_stage("Queue empty, waiting...")
                     logger.info("Queue is empty, waiting...")
                     time.sleep(30)
                     continue
                 
+                self._update_current_stage(f"Processing batch (queue: {queue_depth})")
                 logger.info("Processing batch", queue_depth=queue_depth)
                 
                 # Receive messages
                 messages = self.sqs_service.poll_messages(config.batch_size)
                 
                 if not messages:
+                    self._update_current_stage("No messages received, waiting...")
                     logger.info("No messages received, waiting...")
                     time.sleep(10)
                     continue
