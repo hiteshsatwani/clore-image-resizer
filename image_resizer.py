@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Tuple
 
 import torch
-from PIL import Image
+from PIL import Image, ImageFilter
 from diffusers import StableDiffusionXLInpaintPipeline
 from transformers import pipeline
+import numpy as np
 
 
 class ImageResizer:
@@ -78,7 +79,7 @@ class ImageResizer:
         return new_width, new_height
     
     def create_extension_mask(self, original_img: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
-        """Create mask for areas that need to be inpainted."""
+        """Create mask for areas that need to be inpainted with feathered edges."""
         target_width, target_height = target_size
         orig_width, orig_height = original_img.size
         
@@ -91,6 +92,9 @@ class ImageResizer:
         
         # Black out the original image area (don't inpaint)
         mask.paste(0, (x_offset, y_offset, x_offset + orig_width, y_offset + orig_height))
+        
+        # Apply feathering to mask edges for better blending
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=2))
         
         return mask
     
@@ -140,6 +144,23 @@ class ImageResizer:
         # In production, you might use CLIP or BLIP for better scene understanding
         return "seamless natural extension, photorealistic, high quality, detailed background, consistent lighting and style"
     
+    def preserve_original_content(self, ai_result: Image.Image, original_img: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
+        """Preserve original image content by pasting it back onto the AI-generated result."""
+        target_width, target_height = target_size
+        orig_width, orig_height = original_img.size
+        
+        # Calculate centering position
+        x_offset = (target_width - orig_width) // 2
+        y_offset = (target_height - orig_height) // 2
+        
+        # Create a copy of the AI result
+        final_result = ai_result.copy()
+        
+        # Paste the original image back to ensure content is preserved
+        final_result.paste(original_img, (x_offset, y_offset))
+        
+        return final_result
+    
     def resize_image(self, image_path: str, output_path: str) -> bool:
         """Resize image to 9:16 aspect ratio using AI inpainting."""
         try:
@@ -187,13 +208,13 @@ class ImageResizer:
             
             print("Running AI inpainting...")
             
-            # Run inpainting
+            # Run inpainting with reduced strength to minimize impact on original content
             result = self.inpaint_pipeline(
                 prompt=prompt,
                 image=base_resized,
                 mask_image=mask_resized,
                 num_inference_steps=20,  # Reduced for speed
-                strength=0.8,
+                strength=0.4,  # Reduced from 0.8 to minimize content modification
                 guidance_scale=7.5,
                 height=process_height,
                 width=process_width
@@ -203,8 +224,11 @@ class ImageResizer:
             if scale_factor < 1:
                 result = result.resize((target_width, target_height), Image.LANCZOS)
             
+            # Preserve original content by pasting it back onto the AI result
+            final_result = self.preserve_original_content(result, scaled_img, (target_width, target_height))
+            
             # Save result
-            result.save(output_path, quality=95)
+            final_result.save(output_path, quality=95)
             print(f"Saved resized image to: {output_path}")
             
             return True
