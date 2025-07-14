@@ -1,12 +1,35 @@
+# Core ML/AI Dependencies
 torch>=2.0.0
 torchvision>=0.15.0
 diffusers>=0.25.0
 transformers>=4.35.0
 accelerate>=0.24.0
 safetensors>=0.4.0
+
+# Image Processing
 Pillow>=10.0.0
 numpy<2.0.0,>=1.24.0
 opencv-python>=4.8.0
+
+# Computer Vision & ML Models
 ultralytics>=8.0.0
 open-clip-torch>=2.20.0
 sentence-transformers>=2.2.0
+
+# AWS Services
+boto3>=1.26.0
+botocore>=1.29.0
+
+# Database
+psycopg2-binary>=2.9.0
+
+# Web/HTTP
+requests>=2.25.0
+
+# Configuration & Utilities
+python-dotenv>=0.19.0
+structlog>=21.1.0
+tenacity>=8.0.0
+
+# Development & Packaging
+setuptools>=65.0.0
