@@ -75,18 +75,19 @@ class AdvancedSceneAnalyzer:
         print("🔍 Loading scene analysis models...")
         
         try:
-            # BLIP-2 for detailed image captioning
-            self.blip_processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
-            self.blip_model = Blip2ForConditionalGeneration.from_pretrained(
-                "Salesforce/blip2-opt-2.7b",
-                torch_dtype=torch.float16,
-                device_map="auto"
-            )
-            print("✓ BLIP-2 captioning model loaded")
+            # Git-Base for fast image captioning (500MB vs 2.7GB BLIP-2)
+            from transformers import AutoProcessor, AutoModelForCausalLM
+            
+            self.caption_processor = AutoProcessor.from_pretrained("microsoft/git-base-coco")
+            self.caption_model = AutoModelForCausalLM.from_pretrained(
+                "microsoft/git-base-coco",
+                torch_dtype=torch.float16
+            ).to(device)
+            print("✓ Git-Base captioning model loaded (fast)")
         except Exception as e:
-            print(f"⚠️  BLIP-2 failed to load: {e}")
-            self.blip_model = None
-            self.blip_processor = None
+            print(f"⚠️  Git-Base failed to load: {e}")
+            self.caption_model = None
+            self.caption_processor = None
         
         try:
             # CLIP for classification
@@ -99,17 +100,9 @@ class AdvancedSceneAnalyzer:
             print(f"⚠️  CLIP failed to load: {e}")
             self.clip_model = None
         
-        try:
-            # Lightweight depth estimation
-            self.depth_estimator = hf_pipeline(
-                "depth-estimation",
-                model="Intel/dpt-large", 
-                device=device
-            )
-            print("✓ Depth estimation model loaded")
-        except Exception as e:
-            print(f"⚠️  Depth estimator failed to load: {e}")
-            self.depth_estimator = None
+        # Skip depth estimation for performance - rarely needed for product photos
+        print("⚠️  Skipping depth estimation for performance")
+        self.depth_estimator = None
         
         print("🔍 Scene analysis models ready!")
     
@@ -160,16 +153,25 @@ class AdvancedSceneAnalyzer:
     
     def _generate_caption(self, image: Image.Image) -> str:
         """Generate image caption with fallback."""
-        if self.blip_model is None:
+        if self.caption_model is None:
             return self._fallback_caption_analysis(image)
         
         try:
-            inputs = self.blip_processor(image, return_tensors="pt").to(self.device, torch.float16)
-            generated_ids = self.blip_model.generate(**inputs, max_length=50)
-            caption = self.blip_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+            # Git-Base is much faster than BLIP-2
+            inputs = self.caption_processor(images=image, return_tensors="pt").to(self.device)
+            
+            with torch.no_grad():
+                generated_ids = self.caption_model.generate(
+                    **inputs,
+                    max_length=30,  # Shorter for speed
+                    num_beams=2,    # Fewer beams for speed
+                    temperature=0.7
+                )
+            
+            caption = self.caption_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
             return caption.strip()
         except Exception as e:
-            print(f"⚠️  BLIP-2 caption failed: {e}")
+            print(f"⚠️  Git-Base caption failed: {e}")
             return self._fallback_caption_analysis(image)
     
     def _fallback_caption_analysis(self, image: Image.Image) -> str:
@@ -351,9 +353,14 @@ class ImageResizer:
                 use_safetensors=True
             ).to(device)
             
-            # Memory optimizations
-            self.primary_inpainter.enable_model_cpu_offload()
+            # Memory optimizations - but keep models on GPU for speed
+            # self.primary_inpainter.enable_model_cpu_offload()  # Skip for speed
             self.primary_inpainter.enable_vae_slicing()
+            # Enable xformers for faster attention if available
+            try:
+                self.primary_inpainter.enable_xformers_memory_efficient_attention()
+            except:
+                pass
             print("✓ Primary SDXL inpainter loaded")
             
         except Exception as e:
@@ -381,8 +388,8 @@ class ImageResizer:
                 inpaint_strength=0.6,
                 prompt_template="seamless solid {color} studio background, professional product photography, clean, minimal",
                 use_depth=False,
-                edge_feather=3,
-                inference_steps=15,
+                edge_feather=2,
+                inference_steps=10,  # Reduced for speed
                 guidance_scale=6.0
             ),
             BackgroundType.STUDIO_GRADIENT: ProcessingStrategy(
@@ -390,8 +397,8 @@ class ImageResizer:
                 inpaint_strength=0.7,
                 prompt_template="smooth gradient studio background, professional lighting, seamless transition",
                 use_depth=False,
-                edge_feather=5,
-                inference_steps=18,
+                edge_feather=3,
+                inference_steps=12,  # Reduced for speed
                 guidance_scale=6.5
             ),
             BackgroundType.TEXTURED_WALL: ProcessingStrategy(
@@ -399,26 +406,26 @@ class ImageResizer:
                 inpaint_strength=0.75,
                 prompt_template="textured wall background, consistent pattern and lighting, seamless extension",
                 use_depth=False,
-                edge_feather=4,
-                inference_steps=20,
+                edge_feather=3,
+                inference_steps=15,  # Reduced for speed
                 guidance_scale=7.0
             ),
             BackgroundType.COMPLEX_SCENE: ProcessingStrategy(
                 extension_method="ai_generate",
                 inpaint_strength=0.85,
                 prompt_template="{caption}, photorealistic scene extension, natural lighting, high detail",
-                use_depth=True,
-                edge_feather=6,
-                inference_steps=25,
+                use_depth=False,  # Skip depth for speed
+                edge_feather=4,
+                inference_steps=18,  # Reduced for speed
                 guidance_scale=7.5
             ),
             BackgroundType.LIFESTYLE_NATURAL: ProcessingStrategy(
                 extension_method="ai_generate",
                 inpaint_strength=0.8,
                 prompt_template="lifestyle photography, {caption}, natural environment, realistic extension",
-                use_depth=True,
-                edge_feather=5,
-                inference_steps=22,
+                use_depth=False,  # Skip depth for speed
+                edge_feather=3,
+                inference_steps=15,  # Reduced for speed
                 guidance_scale=7.0
             ),
             BackgroundType.PRODUCT_ONLY: ProcessingStrategy(
@@ -427,7 +434,7 @@ class ImageResizer:
                 prompt_template="clean product background extension, minimal, professional",
                 use_depth=False,
                 edge_feather=2,
-                inference_steps=12,
+                inference_steps=8,   # Reduced for speed
                 guidance_scale=5.5
             )
         }
@@ -650,8 +657,8 @@ class ImageResizer:
         print(f"📝 Prompt: {prompt[:80]}...")
         
         try:
-            # Optimize processing size for g5.2xlarge
-            max_dimension = 768  # Reduced for speed
+            # Optimize processing size for g5.2xlarge - further reduced for speed
+            max_dimension = 512  # Much faster processing
             scale_factor = min(1.0, max_dimension / max(canvas.width, canvas.height))
             
             if scale_factor < 1.0:

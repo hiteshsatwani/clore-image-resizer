@@ -12,7 +12,7 @@ import threading
 from datetime import datetime, timedelta
 
 from config import config
-from logger import logger
+from logger import logger, save_shutdown_logs
 from sqs_service import SQSService, ProcessingMessage
 from database_service import DatabaseService, Product
 from s3_service import S3Service
@@ -52,10 +52,10 @@ class PipelineOrchestrator:
         self.current_product_id = None
         self.current_stage = "Initializing"
         self.current_batch_size = 0
+        self.start_time = datetime.now()
         self.current_batch_progress = 0
         self.recent_processing_times = []
         self.last_activity = time.time()
-        self.start_time = time.time()
         
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -609,7 +609,27 @@ def main():
         logger.info("Received keyboard interrupt")
     except Exception as e:
         logger.error("Fatal error in orchestrator", error=str(e))
-        sys.exit(1)
+    finally:
+        # Save shutdown logs with stats
+        shutdown_stats = {
+            'processed_count': getattr(orchestrator, 'processed_count', 0),
+            'failed_count': getattr(orchestrator, 'failed_count', 0),
+            'start_time': getattr(orchestrator, 'start_time', None),
+            'shutdown_reason': 'normal' if not hasattr(orchestrator, '_shutdown_error') else 'error'
+        }
+        
+        if hasattr(orchestrator, 'start_time') and orchestrator.start_time:
+            shutdown_stats['runtime_seconds'] = (datetime.now() - orchestrator.start_time).total_seconds()
+        
+        logger.info("Pipeline shutting down", **shutdown_stats)
+        log_file = save_shutdown_logs(shutdown_stats)
+        
+        if log_file:
+            print(f"📊 Final stats: {orchestrator.processed_count} processed, {orchestrator.failed_count} failed")
+            print(f"📝 Detailed logs saved to: {log_file}")
+        
+        if hasattr(orchestrator, '_shutdown_error'):
+            sys.exit(1)
 
 if __name__ == "__main__":
     main()
