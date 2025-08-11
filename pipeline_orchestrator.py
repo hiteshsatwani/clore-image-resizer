@@ -343,63 +343,37 @@ class PipelineOrchestrator:
                 try:
                     self._update_current_stage(f"AI processing image {i+1}/{len(valid_images)}", message.product_id)
                     
-                    # Scale to 1080p first
-                    scaled_image = self.image_resizer.scale_to_1080p(image)
+                    # Save image to temporary file for processing
+                    import tempfile
+                    import os
                     
-                    # Calculate target dimensions
-                    width, height = scaled_image.size
-                    target_width, target_height = self.image_resizer.calculate_target_dimensions(width, height)
+                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_input:
+                        image.save(temp_input.name, format='JPEG', quality=95)
+                        temp_input_path = temp_input.name
                     
-                    # Skip if already correct ratio
-                    if width == target_width and height == target_height:
-                        processed_images.append(scaled_image)
-                        continue
+                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_output:
+                        temp_output_path = temp_output.name
                     
-                    # Create base canvas and mask
-                    base_canvas = self.image_resizer.create_base_canvas(scaled_image, (target_width, target_height))
-                    mask = self.image_resizer.create_extension_mask(scaled_image, (target_width, target_height))
-                    
-                    # Generate prompt
-                    prompt = self.image_resizer.generate_inpaint_prompt()
-                    
-                    # Resize for processing
-                    process_size = 1024
-                    scale_factor = process_size / max(target_width, target_height)
-                    
-                    if scale_factor < 1:
-                        process_width = int(target_width * scale_factor)
-                        process_height = int(target_height * scale_factor)
+                    try:
+                        # Use the advanced pipeline
+                        logger.info("Running advanced AI pipeline", product_id=message.product_id, image_index=i)
+                        success = self.image_resizer.resize_image(temp_input_path, temp_output_path)
                         
-                        # Ensure dimensions are divisible by 8
-                        process_width = ((process_width + 7) // 8) * 8
-                        process_height = ((process_height + 7) // 8) * 8
+                        if success:
+                            # Load the processed result
+                            result = Image.open(temp_output_path).convert('RGB')
+                            processed_images.append(result)
+                        else:
+                            logger.warning("Image processing failed, using original", product_id=message.product_id, image_index=i)
+                            processed_images.append(image)
                         
-                        base_resized = base_canvas.resize((process_width, process_height), Image.LANCZOS)
-                        mask_resized = mask.resize((process_width, process_height), Image.LANCZOS)
-                    else:
-                        base_resized = base_canvas
-                        mask_resized = mask
-                        process_width, process_height = target_width, target_height
-                    
-                    # Run AI inpainting
-                    logger.info("Running AI inpainting", product_id=message.product_id, image_index=i)
-                    
-                    result = self.image_resizer.inpaint_pipeline(
-                        prompt=prompt,
-                        image=base_resized,
-                        mask_image=mask_resized,
-                        num_inference_steps=20,
-                        strength=0.8,
-                        guidance_scale=7.5,
-                        height=process_height,
-                        width=process_width
-                    ).images[0]
-                    
-                    # Resize back to target size if needed
-                    if scale_factor < 1:
-                        result = result.resize((target_width, target_height), Image.LANCZOS)
-                    
-                    processed_images.append(result)
+                    finally:
+                        # Clean up temporary files
+                        try:
+                            os.unlink(temp_input_path)
+                            os.unlink(temp_output_path)
+                        except:
+                            pass
                     
                     # Clear GPU memory
                     if hasattr(self.image_resizer, 'device') and 'cuda' in self.image_resizer.device and torch is not None:
