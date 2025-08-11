@@ -1,20 +1,33 @@
 #!/usr/bin/env python3
 """
-AI-powered image resizer to 9:16 aspect ratio with realistic extension.
-Uses advanced inpainting models for seamless results.
+Advanced AI-powered image resizer to 9:16 aspect ratio.
+Multi-stage pipeline with scene understanding and adaptive processing.
 """
 
 import argparse
 import sys
 import time
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Dict, List, Optional
+from dataclasses import dataclass
+from enum import Enum
 
 import torch
-from PIL import Image, ImageFilter
-from diffusers import StableDiffusionXLInpaintPipeline
-from transformers import pipeline
+import torch.nn.functional as F
+from PIL import Image, ImageFilter, ImageEnhance, ImageDraw
+from diffusers import StableDiffusionXLInpaintPipeline, AutoPipelineForInpainting
+from transformers import (
+    Blip2Processor, Blip2ForConditionalGeneration,
+    CLIPProcessor, CLIPModel,
+    pipeline as hf_pipeline
+)
 import numpy as np
+import cv2
+from scipy import ndimage
+from scipy.ndimage import binary_dilation, gaussian_filter
+from skimage import segmentation, color, measure
+from sklearn.cluster import KMeans
+import open_clip
 
 
 class ImageResizer:
@@ -239,84 +252,110 @@ class ImageResizer:
         return canvas
     
     def resize_image(self, image_path: str, output_path: str) -> bool:
-        """Resize image to 9:16 aspect ratio using AI inpainting."""
+        """Advanced multi-stage image resizing with scene understanding."""
         try:
-            # Load image
+            start_time = time.time()
+            print(f"\n=== Processing: {Path(image_path).name} ===")
+            
+            # Load and prepare image
             original_img = Image.open(image_path).convert('RGB')
             orig_width, orig_height = original_img.size
-            
             print(f"Original size: {orig_width}x{orig_height}")
             
-            # First scale to 1080p if needed
-            scaled_img = self.scale_to_1080p(original_img)
-            scaled_width, scaled_height = scaled_img.size
+            # Scale for processing
+            processing_img = self.scale_to_processing_size(original_img)
+            proc_width, proc_height = processing_img.size
             
-            # Calculate target dimensions based on scaled image
-            target_width, target_height = self.calculate_target_dimensions(scaled_width, scaled_height)
+            # Calculate target dimensions
+            target_width, target_height = self.calculate_target_dimensions(proc_width, proc_height)
             print(f"Target size: {target_width}x{target_height}")
             
             # Check if already correct ratio
-            if scaled_width == target_width and scaled_height == target_height:
+            if proc_width == target_width and proc_height == target_height:
                 print("Image already has correct aspect ratio")
-                scaled_img.save(output_path, quality=95)
+                processing_img.save(output_path, quality=95)
                 return True
             
-            # Create base canvas and mask using scaled image
-            base_canvas = self.create_composite_image(scaled_img, (target_width, target_height))
-            mask = self.create_extension_mask(scaled_img, (target_width, target_height))
+            # STAGE 1: Scene Understanding (2s)
+            stage_start = time.time()
+            print("\n[Stage 1] Scene Understanding...")
+            analysis = self.scene_analyzer.analyze_scene(processing_img)
+            print(f"Caption: {analysis.caption}")
+            print(f"Background: {analysis.background_type.value}")
+            print(f"Has person: {analysis.has_person}")
+            print(f"Confidence: {analysis.confidence:.2f}")
+            print(f"Stage 1 completed in {time.time() - stage_start:.1f}s")
             
-            # Generate inpainting prompt
-            prompt = self.generate_inpaint_prompt()
+            # STAGE 2: Strategy Selection (1s)
+            stage_start = time.time()
+            print("\n[Stage 2] Strategy Selection...")
+            strategy = self.get_processing_strategy(analysis)
+            print(f"Method: {strategy.extension_method}")
+            print(f"Strength: {strategy.inpaint_strength}")
+            print(f"Stage 2 completed in {time.time() - stage_start:.1f}s")
             
-            # Resize for processing (SDXL works best at 1024x1024)
-            process_size = 1024
-            scale_factor = process_size / max(target_width, target_height)
+            # STAGE 3: Multi-Model Processing (6s)
+            stage_start = time.time()
+            print("\n[Stage 3] AI Processing...")
             
-            if scale_factor < 1:
-                process_width = int(target_width * scale_factor)
-                process_height = int(target_height * scale_factor)
+            # Create adaptive canvas and mask
+            base_canvas = self.create_adaptive_canvas(processing_img, (target_width, target_height), strategy, analysis)
+            mask = self.create_smart_mask(processing_img, (target_width, target_height), analysis.subject_mask, strategy.edge_feather)
+            
+            # Generate dynamic prompt
+            prompt = self.generate_dynamic_prompt(strategy, analysis)
+            print(f"Prompt: {prompt}")
+            
+            # Run multi-model inpainting
+            inpaint_results = self.run_multi_model_inpainting(base_canvas, mask, prompt, strategy)
+            
+            if not inpaint_results:
+                raise Exception("All inpainting models failed")
+            
+            # Select best result
+            best_model, best_result = inpaint_results[0]  # For now, take first successful result
+            print(f"Using result from {best_model} model")
+            print(f"Stage 3 completed in {time.time() - stage_start:.1f}s")
+            
+            # STAGE 4: Post-Processing (1s)
+            stage_start = time.time()
+            print("\n[Stage 4] Post-Processing...")
+            
+            # Apply advanced post-processing
+            final_result = self.apply_advanced_post_processing(best_result, processing_img, (target_width, target_height), analysis)
+            
+            # Calculate quality score
+            quality_score = self.calculate_quality_score(final_result, processing_img, (target_width, target_height))
+            print(f"Quality score: {quality_score:.2f}")
+            
+            # If quality is too low, try fallback processing
+            if quality_score < 0.6 and len(inpaint_results) > 1:
+                print("Quality too low, trying alternative result...")
+                _, alt_result = inpaint_results[1]
+                alt_final = self.apply_advanced_post_processing(alt_result, processing_img, (target_width, target_height), analysis)
+                alt_quality = self.calculate_quality_score(alt_final, processing_img, (target_width, target_height))
                 
-                base_resized = base_canvas.resize((process_width, process_height), Image.LANCZOS)
-                mask_resized = mask.resize((process_width, process_height), Image.LANCZOS)
-            else:
-                base_resized = base_canvas
-                mask_resized = mask
-                process_width, process_height = target_width, target_height
+                if alt_quality > quality_score:
+                    final_result = alt_final
+                    quality_score = alt_quality
+                    print(f"Using alternative result, quality: {alt_quality:.2f}")
             
-            print("Running AI inpainting...")
-            
-            # Run inpainting with very low strength to only generate extensions
-            result = self.inpaint_pipeline(
-                prompt=prompt,
-                image=base_resized,
-                mask_image=mask_resized,
-                num_inference_steps=25,  # Slightly increased for better quality
-                strength=0.9,  # Higher strength is OK since original area is protected by mask
-                guidance_scale=8.0,  # Slightly higher for better adherence to prompt
-                height=process_height,
-                width=process_width
-            ).images[0]
-            
-            # Resize back to target size if needed
-            if scale_factor < 1:
-                result = result.resize((target_width, target_height), Image.LANCZOS)
-            
-            # Preserve original content by pasting it back onto the AI result
-            final_result = self.preserve_original_content(result, scaled_img, (target_width, target_height))
-            
-            # Validate that original content is preserved
-            is_preserved = self.validate_original_preservation(final_result, scaled_img, (target_width, target_height))
-            if is_preserved:
-                print("✓ Original content successfully preserved")
+            print(f"Stage 4 completed in {time.time() - stage_start:.1f}s")
             
             # Save result
-            final_result.save(output_path, quality=95)
-            print(f"Saved resized image to: {output_path}")
+            final_result.save(output_path, quality=95, optimize=True)
+            
+            total_time = time.time() - start_time
+            print(f"\n✓ Processing completed in {total_time:.1f}s")
+            print(f"✓ Final quality score: {quality_score:.2f}")
+            print(f"✓ Saved to: {output_path}")
             
             return True
             
         except Exception as e:
-            print(f"Error processing {image_path}: {e}")
+            print(f"\n✗ Error processing {image_path}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
 
@@ -335,8 +374,8 @@ def main():
         print("CUDA not available, falling back to CPU")
         args.device = "cpu"
     
-    # Initialize resizer
-    resizer = ImageResizer(device=args.device)
+    # Initialize advanced resizer
+    resizer = AdvancedImageResizer(device=args.device)
     
     input_path = Path(args.input)
     
