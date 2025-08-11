@@ -38,11 +38,20 @@ class PipelineOrchestrator:
     """Main orchestrator for the image processing pipeline."""
     
     def __init__(self):
+        print("🔧 Initializing Pipeline Orchestrator...")
         self.sqs_service = SQSService()
+        print("✓ SQS Service initialized")
         self.db_service = DatabaseService()
+        print("✓ Database Service initialized")
         self.s3_service = S3Service()
+        print("✓ S3 Service initialized")
+        
+        print("🤖 Loading AI models (this may take a moment)...")
         self.image_resizer = ImageResizer(device=config.device)
+        print("✓ Image Resizer initialized")
+        
         self.image_tagger = MultiImageStreetwearTagger(memory_efficient=True)
+        print("✓ Image Tagger initialized")
         
         self.running = True
         self.processed_count = 0
@@ -52,7 +61,7 @@ class PipelineOrchestrator:
         self.current_product_id = None
         self.current_stage = "Initializing"
         self.current_batch_size = 0
-        self.start_time = datetime.now()
+        self.start_time = time.time()
         self.current_batch_progress = 0
         self.recent_processing_times = []
         self.last_activity = time.time()
@@ -202,6 +211,12 @@ class PipelineOrchestrator:
                 
             except Exception as e:
                 # Don't let UI errors crash the main process
+                print(f"UI Error: {e}")
+                print("🚀 CLORE IMAGE PROCESSING PIPELINE")
+                print("=" * 80)
+                print(f"⚠️  UI Error - Basic display mode")
+                print(f"Status: {'RUNNING' if self.running else 'STOPPED'}")
+                print(f"Processed: {self.processed_count}, Failed: {self.failed_count}")
                 time.sleep(5)
     
     def _update_current_stage(self, stage: str, product_id: str = None):
@@ -619,7 +634,7 @@ def main():
         }
         
         if hasattr(orchestrator, 'start_time') and orchestrator.start_time:
-            shutdown_stats['runtime_seconds'] = (datetime.now() - orchestrator.start_time).total_seconds()
+            shutdown_stats['runtime_seconds'] = time.time() - orchestrator.start_time
         
         logger.info("Pipeline shutting down", **shutdown_stats)
         log_file = save_shutdown_logs(shutdown_stats)

@@ -867,8 +867,59 @@ class ImageResizer:
         
         return metrics
     
+    def _is_white_background_product(self, image: Image.Image) -> bool:
+        """Quick check if image is a product photo with white background."""
+        # Sample corners and edges for background detection
+        width, height = image.size
+        samples = []
+        
+        # Corner samples (20x20 px from each corner)
+        corner_size = min(20, width//10, height//10)
+        corners = [
+            image.crop((0, 0, corner_size, corner_size)),  # Top-left
+            image.crop((width-corner_size, 0, width, corner_size)),  # Top-right
+            image.crop((0, height-corner_size, corner_size, height)),  # Bottom-left
+            image.crop((width-corner_size, height-corner_size, width, height))  # Bottom-right
+        ]
+        
+        for corner in corners:
+            avg_color = corner.resize((1, 1)).getpixel((0, 0))
+            samples.extend(avg_color)
+        
+        # Check if background is predominantly white/light
+        avg_brightness = sum(samples) / len(samples)
+        
+        # Also check edge samples
+        edge_size = min(10, width//20, height//20)
+        edges = [
+            image.crop((0, 0, width, edge_size)),  # Top edge
+            image.crop((0, height-edge_size, width, height)),  # Bottom edge
+            image.crop((0, 0, edge_size, height)),  # Left edge
+            image.crop((width-edge_size, 0, width, height))  # Right edge
+        ]
+        
+        edge_brightness = []
+        for edge in edges:
+            edge_avg = edge.resize((1, 1)).getpixel((0, 0))
+            edge_brightness.extend(edge_avg)
+        
+        edge_avg_brightness = sum(edge_brightness) / len(edge_brightness)
+        
+        # Criteria for white background product:
+        # 1. High brightness (> 200 out of 255)
+        # 2. Low variance between corners and edges
+        # 3. Consistent white/light colors
+        
+        is_white_bg = (
+            avg_brightness > 200 and 
+            edge_avg_brightness > 200 and
+            abs(avg_brightness - edge_avg_brightness) < 30
+        )
+        
+        return is_white_bg
+    
     def resize_image(self, image_path: str, output_path: str) -> bool:
-        """Main processing pipeline with comprehensive error handling."""
+        """Main processing pipeline with white background filtering."""
         start_time = time.time()
         
         try:
@@ -878,6 +929,17 @@ class ImageResizer:
             original_img = Image.open(image_path).convert('RGB')
             orig_width, orig_height = original_img.size
             print(f"📐 Original size: {orig_width}x{orig_height}")
+            
+            # EARLY FILTERING: Check if this is a white background product image
+            is_white_bg = self._is_white_background_product(original_img)
+            
+            if not is_white_bg:
+                print("⏭️  Skipping: Not a white background product image")
+                # Copy original without processing
+                original_img.save(output_path, quality=95, optimize=True)
+                return True
+            
+            print("✅ White background detected - proceeding with AI processing")
             
             # Calculate target dimensions
             target_width, target_height = self.calculate_target_dimensions(orig_width, orig_height)
