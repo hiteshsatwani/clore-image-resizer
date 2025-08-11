@@ -15,6 +15,7 @@ from PIL import Image, ImageFilter
 from diffusers import StableDiffusionXLInpaintPipeline
 from transformers import pipeline
 import numpy as np
+from scipy import ndimage
 
 
 class ImageResizer:
@@ -39,6 +40,123 @@ class ImageResizer:
         self.depth_estimator = pipeline("depth-estimation", model="Intel/dpt-large", device=device)
         
         print("Models loaded successfully!")
+    
+    def has_white_background(self, image: Image.Image, white_threshold: float = 0.7, edge_sample_ratio: float = 0.1) -> bool:
+        """
+        Detect if an image has a white background suitable for product images.
+        
+        Args:
+            image: PIL Image to analyze
+            white_threshold: Threshold for considering a pixel "white" (0-1 scale)
+            edge_sample_ratio: Ratio of edge pixels to sample for analysis
+        
+        Returns:
+            True if image has a white background, False otherwise
+        """
+        try:
+            # Convert to RGB if not already
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+            
+            # Convert to numpy array
+            img_array = np.array(image)
+            height, width = img_array.shape[:2]
+            
+            # Sample edge pixels (border regions)
+            border_width = max(10, min(width, height) // 20)  # Dynamic border width
+            
+            # Get edge pixels from all four sides
+            edge_pixels = []
+            
+            # Top and bottom edges
+            edge_pixels.extend(img_array[:border_width, :].reshape(-1, 3))
+            edge_pixels.extend(img_array[-border_width:, :].reshape(-1, 3))
+            
+            # Left and right edges
+            edge_pixels.extend(img_array[:, :border_width].reshape(-1, 3))
+            edge_pixels.extend(img_array[:, -border_width:].reshape(-1, 3))
+            
+            edge_pixels = np.array(edge_pixels)
+            
+            # Sample a subset of edge pixels for efficiency
+            if len(edge_pixels) > 1000:
+                sample_indices = np.random.choice(len(edge_pixels), 1000, replace=False)
+                edge_pixels = edge_pixels[sample_indices]
+            
+            # Convert to 0-1 scale
+            edge_pixels_normalized = edge_pixels.astype(np.float32) / 255.0
+            
+            # Check if pixels are "white" (all RGB values above threshold)
+            white_pixels = np.all(edge_pixels_normalized >= white_threshold, axis=1)
+            white_percentage = np.mean(white_pixels)
+            
+            # Also check for near-white pixels (slight gray/off-white backgrounds)
+            near_white_threshold = white_threshold - 0.1
+            near_white_pixels = np.all(edge_pixels_normalized >= near_white_threshold, axis=1)
+            near_white_percentage = np.mean(near_white_pixels)
+            
+            # Additional check: color uniformity in edges
+            color_std = np.std(edge_pixels_normalized, axis=0)
+            is_uniform = np.all(color_std < 0.1)  # Low standard deviation indicates uniform color
+            
+            # Decision logic: high white percentage OR (moderate near-white + uniformity)
+            is_white_bg = (white_percentage > 0.8) or (near_white_percentage > 0.9 and is_uniform)
+            
+            # Log detection details for debugging
+            print(f"White background detection - White: {white_percentage:.2f}, Near-white: {near_white_percentage:.2f}, Uniform: {is_uniform}, Result: {is_white_bg}")
+            
+            return is_white_bg
+            
+        except Exception as e:
+            print(f"Error in white background detection: {e}")
+            # If detection fails, assume it's suitable for processing (conservative approach)
+            return True
+    
+    def is_simple_product_image(self, image: Image.Image) -> bool:
+        """
+        Determine if an image is a simple product image suitable for processing.
+        This combines white background detection with additional simplicity checks.
+        
+        Args:
+            image: PIL Image to analyze
+        
+        Returns:
+            True if image is suitable for processing, False otherwise
+        """
+        try:
+            # First check for white background
+            has_white_bg = self.has_white_background(image)
+            
+            if not has_white_bg:
+                print("Image rejected: No white background detected")
+                return False
+            
+            # Additional simplicity checks could be added here:
+            # - Check for complex scenes (many objects)
+            # - Check for text overlay complexity
+            # - Check for background patterns
+            
+            # Convert to array for analysis
+            img_array = np.array(image.convert('RGB'))
+            
+            # Simple complexity check: edge density
+            # Simple product images should have clean, defined edges
+            gray = np.mean(img_array, axis=2)
+            edges = ndimage.sobel(gray)
+            edge_density = np.mean(np.abs(edges) > 0.1)
+            
+            # If edge density is too high, image might be too complex
+            if edge_density > 0.3:
+                print(f"Image rejected: Too complex (edge density: {edge_density:.2f})")
+                return False
+            
+            print("Image accepted: Simple product image with white background")
+            return True
+            
+        except Exception as e:
+            print(f"Error in product image analysis: {e}")
+            # If analysis fails, assume it's suitable for processing (conservative approach)
+            return True
     
     def scale_to_1080p(self, image: Image.Image) -> Image.Image:
         """Scale image down to 1080p (1920x1080) if larger, maintaining aspect ratio."""
