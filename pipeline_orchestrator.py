@@ -12,7 +12,7 @@ import threading
 from datetime import datetime, timedelta
 
 from config import config
-from logger import logger, save_shutdown_logs
+from logger import logger
 from sqs_service import SQSService, ProcessingMessage
 from database_service import DatabaseService, Product
 from s3_service import S3Service
@@ -38,20 +38,11 @@ class PipelineOrchestrator:
     """Main orchestrator for the image processing pipeline."""
     
     def __init__(self):
-        print("🔧 Initializing Pipeline Orchestrator...")
         self.sqs_service = SQSService()
-        print("✓ SQS Service initialized")
         self.db_service = DatabaseService()
-        print("✓ Database Service initialized")
         self.s3_service = S3Service()
-        print("✓ S3 Service initialized")
-        
-        print("🤖 Loading AI models (this may take a moment)...")
         self.image_resizer = ImageResizer(device=config.device)
-        print("✓ Image Resizer initialized")
-        
         self.image_tagger = MultiImageStreetwearTagger(memory_efficient=True)
-        print("✓ Image Tagger initialized")
         
         self.running = True
         self.processed_count = 0
@@ -61,10 +52,10 @@ class PipelineOrchestrator:
         self.current_product_id = None
         self.current_stage = "Initializing"
         self.current_batch_size = 0
-        self.start_time = time.time()
         self.current_batch_progress = 0
         self.recent_processing_times = []
         self.last_activity = time.time()
+        self.start_time = time.time()
         
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -211,12 +202,6 @@ class PipelineOrchestrator:
                 
             except Exception as e:
                 # Don't let UI errors crash the main process
-                print(f"UI Error: {e}")
-                print("🚀 CLORE IMAGE PROCESSING PIPELINE")
-                print("=" * 80)
-                print(f"⚠️  UI Error - Basic display mode")
-                print(f"Status: {'RUNNING' if self.running else 'STOPPED'}")
-                print(f"Processed: {self.processed_count}, Failed: {self.failed_count}")
                 time.sleep(5)
     
     def _update_current_stage(self, stage: str, product_id: str = None):
@@ -358,37 +343,63 @@ class PipelineOrchestrator:
                 try:
                     self._update_current_stage(f"AI processing image {i+1}/{len(valid_images)}", message.product_id)
                     
-                    # Save image to temporary file for processing
-                    import tempfile
-                    import os
+                    # Scale to 1080p first
+                    scaled_image = self.image_resizer.scale_to_1080p(image)
                     
-                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_input:
-                        image.save(temp_input.name, format='JPEG', quality=95)
-                        temp_input_path = temp_input.name
+                    # Calculate target dimensions
+                    width, height = scaled_image.size
+                    target_width, target_height = self.image_resizer.calculate_target_dimensions(width, height)
                     
-                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_output:
-                        temp_output_path = temp_output.name
+                    # Skip if already correct ratio
+                    if width == target_width and height == target_height:
+                        processed_images.append(scaled_image)
+                        continue
                     
-                    try:
-                        # Use the advanced pipeline
-                        logger.info("Running advanced AI pipeline", product_id=message.product_id, image_index=i)
-                        success = self.image_resizer.resize_image(temp_input_path, temp_output_path)
+                    # Create base canvas and mask
+                    base_canvas = self.image_resizer.create_base_canvas(scaled_image, (target_width, target_height))
+                    mask = self.image_resizer.create_extension_mask(scaled_image, (target_width, target_height))
+                    
+                    # Generate prompt
+                    prompt = self.image_resizer.generate_inpaint_prompt()
+                    
+                    # Resize for processing
+                    process_size = 1024
+                    scale_factor = process_size / max(target_width, target_height)
+                    
+                    if scale_factor < 1:
+                        process_width = int(target_width * scale_factor)
+                        process_height = int(target_height * scale_factor)
                         
-                        if success:
-                            # Load the processed result
-                            result = Image.open(temp_output_path).convert('RGB')
-                            processed_images.append(result)
-                        else:
-                            logger.warning("Image processing failed, using original", product_id=message.product_id, image_index=i)
-                            processed_images.append(image)
+                        # Ensure dimensions are divisible by 8
+                        process_width = ((process_width + 7) // 8) * 8
+                        process_height = ((process_height + 7) // 8) * 8
                         
-                    finally:
-                        # Clean up temporary files
-                        try:
-                            os.unlink(temp_input_path)
-                            os.unlink(temp_output_path)
-                        except:
-                            pass
+                        base_resized = base_canvas.resize((process_width, process_height), Image.LANCZOS)
+                        mask_resized = mask.resize((process_width, process_height), Image.LANCZOS)
+                    else:
+                        base_resized = base_canvas
+                        mask_resized = mask
+                        process_width, process_height = target_width, target_height
+                    
+                    # Run AI inpainting
+                    logger.info("Running AI inpainting", product_id=message.product_id, image_index=i)
+                    
+                    result = self.image_resizer.inpaint_pipeline(
+                        prompt=prompt,
+                        image=base_resized,
+                        mask_image=mask_resized,
+                        num_inference_steps=20,
+                        strength=0.8,
+                        guidance_scale=7.5,
+                        height=process_height,
+                        width=process_width
+                    ).images[0]
+                    
+                    # Resize back to target size if needed
+                    if scale_factor < 1:
+                        result = result.resize((target_width, target_height), Image.LANCZOS)
+                    
+                    processed_images.append(result)
                     
                     # Clear GPU memory
                     if hasattr(self.image_resizer, 'device') and 'cuda' in self.image_resizer.device and torch is not None:
@@ -624,27 +635,7 @@ def main():
         logger.info("Received keyboard interrupt")
     except Exception as e:
         logger.error("Fatal error in orchestrator", error=str(e))
-    finally:
-        # Save shutdown logs with stats
-        shutdown_stats = {
-            'processed_count': getattr(orchestrator, 'processed_count', 0),
-            'failed_count': getattr(orchestrator, 'failed_count', 0),
-            'start_time': getattr(orchestrator, 'start_time', None),
-            'shutdown_reason': 'normal' if not hasattr(orchestrator, '_shutdown_error') else 'error'
-        }
-        
-        if hasattr(orchestrator, 'start_time') and orchestrator.start_time:
-            shutdown_stats['runtime_seconds'] = time.time() - orchestrator.start_time
-        
-        logger.info("Pipeline shutting down", **shutdown_stats)
-        log_file = save_shutdown_logs(shutdown_stats)
-        
-        if log_file:
-            print(f"📊 Final stats: {orchestrator.processed_count} processed, {orchestrator.failed_count} failed")
-            print(f"📝 Detailed logs saved to: {log_file}")
-        
-        if hasattr(orchestrator, '_shutdown_error'):
-            sys.exit(1)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
