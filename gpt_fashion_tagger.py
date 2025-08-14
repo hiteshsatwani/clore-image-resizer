@@ -106,10 +106,16 @@ You must respond with ONLY valid JSON in this EXACT format (no extra text):
 
 Rules:
 - tags: exactly 7 descriptive tags for product discovery (lowercase, relevant for search)
-- gender: exactly one of: "Male", "Female", "Unisex" 
+- gender: exactly one of: "Male", "Female", "Unisex"
 - category: main category like "Hoodie", "Jeans", "Sneakers", "Dress", etc. (Title Case)
-- Focus on style, fit, color, material, and occasion
-- Response must be valid JSON only"""
+
+Gender Classification Guidelines:
+- Female: baby tee, crop top, mini skirt, dress, women's blouse, feminine cuts, typically women's sizing
+- Male: men's shirt, masculine cuts, boxier fits, typically men's sizing  
+- Unisex: hoodies, basic t-shirts, jeans, sneakers, items that work for any gender
+
+Focus on: style, fit, color, material, occasion, and gender-specific design cues
+Response must be valid JSON only"""
 
             # Call GPT-5 nano API (using the new format you showed)
             response = self.client.responses.create(
