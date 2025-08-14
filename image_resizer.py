@@ -41,9 +41,10 @@ class ImageResizer:
         
         print("Models loaded successfully!")
     
-    def has_white_background(self, image: Image.Image, white_threshold: float = 0.7, edge_sample_ratio: float = 0.1) -> bool:
+    def has_white_background(self, image: Image.Image, white_threshold: float = 0.65, edge_sample_ratio: float = 0.1) -> bool:
         """
         Detect if an image has a white background suitable for product images.
+        Uses multiple sampling strategies to handle large products.
         
         Args:
             image: PIL Image to analyze
@@ -62,48 +63,106 @@ class ImageResizer:
             img_array = np.array(image)
             height, width = img_array.shape[:2]
             
-            # Sample edge pixels (border regions)
-            border_width = max(10, min(width, height) // 20)  # Dynamic border width
+            # Strategy 1: Sample from multiple border regions (thin and thick)
+            border_samples = []
             
-            # Get edge pixels from all four sides
-            edge_pixels = []
+            # Thin border (for smaller products)
+            thin_border = max(5, min(width, height) // 40)
+            border_samples.extend(img_array[:thin_border, :].reshape(-1, 3))  # Top
+            border_samples.extend(img_array[-thin_border:, :].reshape(-1, 3))  # Bottom
+            border_samples.extend(img_array[:, :thin_border].reshape(-1, 3))  # Left
+            border_samples.extend(img_array[:, -thin_border:].reshape(-1, 3))  # Right
             
-            # Top and bottom edges
-            edge_pixels.extend(img_array[:border_width, :].reshape(-1, 3))
-            edge_pixels.extend(img_array[-border_width:, :].reshape(-1, 3))
+            # Thick border (for larger products)
+            thick_border = max(20, min(width, height) // 15)
+            border_samples.extend(img_array[:thick_border, :].reshape(-1, 3))  # Top
+            border_samples.extend(img_array[-thick_border:, :].reshape(-1, 3))  # Bottom
+            border_samples.extend(img_array[:, :thick_border].reshape(-1, 3))  # Left
+            border_samples.extend(img_array[:, -thick_border:].reshape(-1, 3))  # Right
             
-            # Left and right edges
-            edge_pixels.extend(img_array[:, :border_width].reshape(-1, 3))
-            edge_pixels.extend(img_array[:, -border_width:].reshape(-1, 3))
+            # Strategy 2: Sample from corners (always background)
+            corner_size = min(50, min(width, height) // 8)
+            corners = [
+                img_array[:corner_size, :corner_size],  # Top-left
+                img_array[:corner_size, -corner_size:],  # Top-right
+                img_array[-corner_size:, :corner_size],  # Bottom-left
+                img_array[-corner_size:, -corner_size:]   # Bottom-right
+            ]
+            for corner in corners:
+                border_samples.extend(corner.reshape(-1, 3))
             
-            edge_pixels = np.array(edge_pixels)
+            # Strategy 3: Sample from center strips (for very large products)
+            center_strip_width = max(10, min(width, height) // 30)
+            # Vertical center strips (left and right of image center)
+            center_x = width // 2
+            if center_x - center_strip_width > 0:
+                border_samples.extend(img_array[:, :center_strip_width].reshape(-1, 3))  # Far left
+                border_samples.extend(img_array[:, -center_strip_width:].reshape(-1, 3))  # Far right
             
-            # Sample a subset of edge pixels for efficiency
-            if len(edge_pixels) > 1000:
-                sample_indices = np.random.choice(len(edge_pixels), 1000, replace=False)
-                edge_pixels = edge_pixels[sample_indices]
+            # Horizontal center strips (top and bottom of image center)  
+            center_y = height // 2
+            if center_y - center_strip_width > 0:
+                border_samples.extend(img_array[:center_strip_width, :].reshape(-1, 3))  # Far top
+                border_samples.extend(img_array[-center_strip_width:, :].reshape(-1, 3))  # Far bottom
+            
+            border_pixels = np.array(border_samples)
+            
+            # Sample a subset for efficiency
+            if len(border_pixels) > 2000:
+                sample_indices = np.random.choice(len(border_pixels), 2000, replace=False)
+                border_pixels = border_pixels[sample_indices]
             
             # Convert to 0-1 scale
-            edge_pixels_normalized = edge_pixels.astype(np.float32) / 255.0
+            border_pixels_normalized = border_pixels.astype(np.float32) / 255.0
             
-            # Check if pixels are "white" (all RGB values above threshold)
-            white_pixels = np.all(edge_pixels_normalized >= white_threshold, axis=1)
-            white_percentage = np.mean(white_pixels)
+            # Multiple white detection strategies
+            # Strategy A: Pure white pixels
+            pure_white_pixels = np.all(border_pixels_normalized >= white_threshold, axis=1)
+            pure_white_percentage = np.mean(pure_white_pixels)
             
-            # Also check for near-white pixels (slight gray/off-white backgrounds)
-            near_white_threshold = white_threshold - 0.1
-            near_white_pixels = np.all(edge_pixels_normalized >= near_white_threshold, axis=1)
+            # Strategy B: Near-white pixels (off-white, light gray backgrounds)
+            near_white_threshold = white_threshold - 0.15
+            near_white_pixels = np.all(border_pixels_normalized >= near_white_threshold, axis=1)
             near_white_percentage = np.mean(near_white_pixels)
             
-            # Additional check: color uniformity in edges
-            color_std = np.std(edge_pixels_normalized, axis=0)
-            is_uniform = np.all(color_std < 0.1)  # Low standard deviation indicates uniform color
+            # Strategy C: Brightness-based detection (very bright backgrounds)
+            brightness = np.mean(border_pixels_normalized, axis=1)
+            bright_pixels = brightness >= (white_threshold - 0.1)
+            bright_percentage = np.mean(bright_pixels)
             
-            # Decision logic: high white percentage OR (moderate near-white + uniformity)
-            is_white_bg = (white_percentage > 0.8) or (near_white_percentage > 0.9 and is_uniform)
+            # Strategy D: Color uniformity check
+            color_std = np.std(border_pixels_normalized, axis=0)
+            is_uniform = np.all(color_std < 0.15)  # More lenient uniformity
+            
+            # Strategy E: Dominant color analysis
+            # Check if the most common color in borders is white-ish
+            from collections import Counter
+            # Quantize colors to reduce noise
+            quantized_colors = (border_pixels_normalized * 4).astype(int)  # 0-4 scale
+            color_counts = Counter([tuple(color) for color in quantized_colors])
+            if color_counts:
+                most_common_color = color_counts.most_common(1)[0]
+                dominant_color_ratio = most_common_color[1] / len(quantized_colors)
+                dominant_color_brightness = np.mean(most_common_color[0]) / 4.0  # Back to 0-1 scale
+                is_dominant_white = dominant_color_brightness >= (white_threshold - 0.1) and dominant_color_ratio > 0.3
+            else:
+                is_dominant_white = False
+            
+            # Comprehensive decision logic (more lenient for large products)
+            decision_factors = [
+                pure_white_percentage > 0.6,  # Lowered from 0.8
+                near_white_percentage > 0.75,  # Lowered from 0.9
+                bright_percentage > 0.7 and is_uniform,
+                is_dominant_white,
+                pure_white_percentage > 0.4 and is_uniform,  # New: moderate white + uniformity
+            ]
+            
+            is_white_bg = any(decision_factors)
             
             # Log detection details for debugging
-            print(f"White background detection - White: {white_percentage:.2f}, Near-white: {near_white_percentage:.2f}, Uniform: {is_uniform}, Result: {is_white_bg}")
+            print(f"White BG Detection - Pure: {pure_white_percentage:.2f}, Near: {near_white_percentage:.2f}, "
+                  f"Bright: {bright_percentage:.2f}, Uniform: {is_uniform}, Dominant: {is_dominant_white}, "
+                  f"Result: {is_white_bg}")
             
             return is_white_bg
             

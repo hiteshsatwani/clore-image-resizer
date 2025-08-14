@@ -194,15 +194,16 @@ class DatabaseService:
         stop=stop_after_attempt(config.max_retries),
         wait=wait_exponential(multiplier=1, min=4, max=10)
     )
-    def update_product_tags(self, product_id: str, tags: List[str], gender: str, category: str) -> bool:
-        """Update product tags, gender, and category in database."""
+    def update_product_tags(self, product_id: str, tags: List[str], gender: str, category: str, aesthetics: List[str]) -> bool:
+        """Update product tags, gender, category, and aesthetics in database."""
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
                 # Check if columns exist, if not create them
                 columns_to_check = [
                     ("tags", "text[]"),
                     ("gender", "varchar(20)"),
-                    ("category", "varchar(100)")
+                    ("category", "varchar(100)"),
+                    ("aesthetic", "text[]")
                 ]
                 
                 for column_name, column_type in columns_to_check:
@@ -219,12 +220,12 @@ class DatabaseService:
                         """)
                         conn.commit()
                 
-                # Update tags, gender, and category
+                # Update tags, gender, category, and aesthetics
                 cursor.execute("""
                     UPDATE products 
-                    SET tags = %s, gender = %s, category = %s 
+                    SET tags = %s, gender = %s, category = %s, aesthetic = %s 
                     WHERE productid = %s
-                """, (tags, gender, category, product_id))
+                """, (tags, gender, category, aesthetics, product_id))
                 
                 if cursor.rowcount > 0:
                     conn.commit()
@@ -233,7 +234,8 @@ class DatabaseService:
                         product_id=product_id,
                         tags=tags,
                         gender=gender,
-                        category=category
+                        category=category,
+                        aesthetics=aesthetics
                     )
                     return True
                 else:

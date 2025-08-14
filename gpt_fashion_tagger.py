@@ -22,6 +22,7 @@ class TaggingResult:
     tags: List[str]
     gender: str
     category: str
+    aesthetics: List[str]
     processing_time: float = 0.0
     error: Optional[str] = None
 
@@ -101,20 +102,28 @@ You must respond with ONLY valid JSON in this EXACT format (no extra text):
 {{
     "tags": ["tag1", "tag2", "tag3", "tag4", "tag5", "tag6", "tag7"],
     "gender": "Male|Female|Unisex",
-    "category": "Main Category Name"
+    "category": "Main Category Name",
+    "aesthetics": ["aesthetic1", "aesthetic2", "aesthetic3"]
 }}
 
 Rules:
 - tags: exactly 7 descriptive tags for product discovery (lowercase, relevant for search)
 - gender: exactly one of: "Male", "Female", "Unisex"
 - category: main category like "Hoodie", "Jeans", "Sneakers", "Dress", etc. (Title Case)
+- aesthetics: exactly 3 style aesthetics that describe this product (lowercase)
 
 Gender Classification Guidelines:
 - Female: baby tee, crop top, mini skirt, dress, women's blouse, feminine cuts, typically women's sizing
 - Male: men's shirt, masculine cuts, boxier fits, typically men's sizing  
 - Unisex: hoodies, basic t-shirts, jeans, sneakers, items that work for any gender
 
-Focus on: style, fit, color, material, occasion, and gender-specific design cues
+Aesthetic Examples:
+- y2k, grunge, minimalist, vintage, retro, gothic, kawaii, preppy, bohemian, industrial
+- streetwear, cottagecore, dark academia, light academia, fairycore, indie, alt
+- coquette, soft girl, clean girl, baddie, e-girl, academia, normcore, gorpcore
+- cyberpunk, steampunk, punk, emo, scene, hipster, sporty, elegant, edgy
+
+Focus on: style, fit, color, material, occasion, gender-specific design cues, and visual aesthetics
 Response must be valid JSON only"""
 
             # Call GPT-5 nano API (using the new format you showed)
@@ -143,12 +152,19 @@ Response must be valid JSON only"""
             tags = result_data.get("tags", [])
             gender = result_data.get("gender", "Unisex")
             category = result_data.get("category", "Unknown")
+            aesthetics = result_data.get("aesthetics", [])
             
             # Ensure exactly 7 tags
             if len(tags) < 7:
                 tags.extend(["fashion", "clothing", "apparel", "style", "trendy", "casual", "wear"][:7-len(tags)])
             elif len(tags) > 7:
                 tags = tags[:7]
+            
+            # Ensure exactly 3 aesthetics
+            if len(aesthetics) < 3:
+                aesthetics.extend(["minimalist", "casual", "modern"][:3-len(aesthetics)])
+            elif len(aesthetics) > 3:
+                aesthetics = aesthetics[:3]
             
             # Validate gender
             if gender not in ["Male", "Female", "Unisex"]:
@@ -167,6 +183,7 @@ Response must be valid JSON only"""
                 category=category,
                 gender=gender,
                 tag_count=len(tags),
+                aesthetic_count=len(aesthetics),
                 processing_time=round(processing_time, 2)
             )
             
@@ -174,6 +191,7 @@ Response must be valid JSON only"""
                 tags=tags,
                 gender=gender,
                 category=category,
+                aesthetics=aesthetics,
                 processing_time=processing_time
             )
             
@@ -193,6 +211,7 @@ Response must be valid JSON only"""
                 tags=["fashion", "clothing", "apparel", "style", "trendy", "casual", "wear"],
                 gender="Unisex",
                 category="Apparel",
+                aesthetics=["minimalist", "casual", "modern"],
                 processing_time=processing_time,
                 error=error_msg
             )

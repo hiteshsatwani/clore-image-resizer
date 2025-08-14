@@ -455,16 +455,18 @@ class PipelineOrchestrator:
                         tags = tag_result.tags
                         gender = tag_result.gender
                         category = tag_result.category
+                        aesthetics = tag_result.aesthetics
                         
-                        # Update database with tags
-                        self.db_service.update_product_tags(message.product_id, tags, gender, category)
-                        self._add_log_entry("SUCCESS", message.product_id, f"Tagged: {category} | {gender} | {len(tags)} tags")
+                        # Update database with tags and aesthetics
+                        self.db_service.update_product_tags(message.product_id, tags, gender, category, aesthetics)
+                        self._add_log_entry("SUCCESS", message.product_id, f"Tagged: {category} | {gender} | {len(tags)} tags | {len(aesthetics)} aesthetics")
                         logger.info(
                             "Product tagged successfully with GPT",
                             product_id=message.product_id,
                             tags=tags,
                             gender=gender,
                             category=category,
+                            aesthetics=aesthetics,
                             processing_time=tag_result.processing_time
                         )
                     else:
