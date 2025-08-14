@@ -582,8 +582,8 @@ class PipelineOrchestrator:
                 self._add_log_entry("INFO", message.product_id, "Starting GPT tagging process")
                 logger.info("Tagging processed images with GPT", product_id=message.product_id)
                 
-                # Get product name from database or use product ID
-                product_name = message.product_id  # You might want to fetch actual product name from DB
+                # Use the product title we already fetched from the database
+                product_name = product.title or f"Product {message.product_id}"
                 
                 # Run GPT tagger on processed PIL images directly (no temp files needed)
                 tag_result = self.image_tagger.tag_product(

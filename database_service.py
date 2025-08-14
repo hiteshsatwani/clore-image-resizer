@@ -15,6 +15,7 @@ class Product:
     """Product data structure."""
     product_id: str
     images: List[str]
+    title: Optional[str] = None
     
 class DatabaseService:
     """Service for database operations."""
@@ -61,7 +62,7 @@ class DatabaseService:
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT productid, images FROM products WHERE productid = %s",
+                    "SELECT productid, images, title FROM products WHERE productid = %s",
                     (product_id,)
                 )
                 result = cursor.fetchone()
@@ -69,7 +70,8 @@ class DatabaseService:
                 if result:
                     return Product(
                         product_id=result[0],
-                        images=result[1] if result[1] else []
+                        images=result[1] if result[1] else [],
+                        title=result[2] if result[2] else None
                     )
                 return None
     
