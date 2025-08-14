@@ -430,6 +430,55 @@ class PipelineOrchestrator:
             logger.info("Downloading images", product_id=message.product_id, image_count=len(product.images))
             downloaded_images = self.s3_service.download_batch_images(product.images)
             
+            # Tag ALL products first (before filtering) using original downloaded images
+            try:
+                self._update_current_stage("GPT tagging all product images", message.product_id)
+                self._add_log_entry("INFO", message.product_id, "Starting GPT tagging process for all images")
+                logger.info("Tagging all product images with GPT", product_id=message.product_id)
+                
+                # Get all successfully downloaded images for tagging
+                all_downloaded_images = [img for img in downloaded_images if img is not None]
+                
+                if all_downloaded_images:
+                    # Use the product title we already fetched from the database
+                    product_name = product.title or f"Product {message.product_id}"
+                    
+                    # Run GPT tagger on ALL downloaded images
+                    tag_result = self.image_tagger.tag_product(
+                        images=all_downloaded_images,
+                        product_name=product_name,
+                        product_id=message.product_id
+                    )
+                    
+                    if not tag_result.error:
+                        # GPT tagger returns the exact format we need for the database
+                        tags = tag_result.tags
+                        gender = tag_result.gender
+                        category = tag_result.category
+                        
+                        # Update database with tags
+                        self.db_service.update_product_tags(message.product_id, tags, gender, category)
+                        self._add_log_entry("SUCCESS", message.product_id, f"Tagged: {category} | {gender} | {len(tags)} tags")
+                        logger.info(
+                            "Product tagged successfully with GPT",
+                            product_id=message.product_id,
+                            tags=tags,
+                            gender=gender,
+                            category=category,
+                            processing_time=tag_result.processing_time
+                        )
+                    else:
+                        self._add_log_entry("ERROR", message.product_id, f"GPT tagging failed: {tag_result.error}")
+                        logger.warning("GPT tagging failed", product_id=message.product_id, error=tag_result.error)
+                else:
+                    self._add_log_entry("WARN", message.product_id, "No images available for tagging")
+                    logger.warning("No images available for tagging", product_id=message.product_id)
+                        
+            except Exception as e:
+                self._add_log_entry("ERROR", message.product_id, f"Tagging error: {str(e)}")
+                logger.error("Error during tagging", product_id=message.product_id, error=str(e))
+            
+            # Now continue with image filtering for AI processing (separate from tagging)
             # Filter out failed downloads and check for white background product images
             self._update_current_stage("Filtering product images", message.product_id)
             valid_images = []
@@ -575,47 +624,6 @@ class PipelineOrchestrator:
             self._add_log_entry("INFO", message.product_id, "Updating database with new image URLs")
             logger.info("Updating database with new URLs", product_id=message.product_id)
             self.db_service.update_product_images(message.product_id, s3_urls)
-            
-            # Tag the processed images with GPT
-            try:
-                self._update_current_stage("GPT tagging processed images", message.product_id)
-                self._add_log_entry("INFO", message.product_id, "Starting GPT tagging process")
-                logger.info("Tagging processed images with GPT", product_id=message.product_id)
-                
-                # Use the product title we already fetched from the database
-                product_name = product.title or f"Product {message.product_id}"
-                
-                # Run GPT tagger on processed PIL images directly (no temp files needed)
-                tag_result = self.image_tagger.tag_product(
-                    images=processed_images,
-                    product_name=product_name,
-                    product_id=message.product_id
-                )
-                
-                if not tag_result.error:
-                    # GPT tagger returns the exact format we need for the database
-                    tags = tag_result.tags
-                    gender = tag_result.gender
-                    category = tag_result.category
-                    
-                    # Update database with tags
-                    self.db_service.update_product_tags(message.product_id, tags, gender, category)
-                    self._add_log_entry("SUCCESS", message.product_id, f"Tagged: {category} | {gender} | {len(tags)} tags")
-                    logger.info(
-                        "Product tagged successfully with GPT",
-                        product_id=message.product_id,
-                        tags=tags,
-                        gender=gender,
-                        category=category,
-                        processing_time=tag_result.processing_time
-                    )
-                else:
-                    self._add_log_entry("ERROR", message.product_id, f"GPT tagging failed: {tag_result.error}")
-                    logger.warning("GPT tagging failed", product_id=message.product_id, error=tag_result.error)
-                        
-            except Exception as e:
-                self._add_log_entry("ERROR", message.product_id, f"Tagging error: {str(e)}")
-                logger.error("Error during tagging", product_id=message.product_id, error=str(e))
             
             self._update_current_stage("Finalizing product", message.product_id)
             self._add_log_entry("SUCCESS", message.product_id, f"Product processing completed - {len(processed_images)} images processed")
