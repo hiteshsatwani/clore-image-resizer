@@ -19,7 +19,7 @@ from sqs_service import SQSService, ProcessingMessage
 from database_service import DatabaseService, Product
 from s3_service import S3Service
 from image_resizer import ImageResizer
-from multi_image_streetwear_tagger import MultiImageStreetwearTagger
+from gpt_fashion_tagger import GPTFashionTagger
 from PIL import Image
 
 try:
@@ -53,7 +53,7 @@ class PipelineOrchestrator:
         self.db_service = DatabaseService()
         self.s3_service = S3Service()
         self.image_resizer = ImageResizer(device=config.device)
-        self.image_tagger = MultiImageStreetwearTagger(memory_efficient=True)
+        self.image_tagger = GPTFashionTagger()
         
         self.running = True
         self.processed_count = 0
@@ -576,51 +576,42 @@ class PipelineOrchestrator:
             logger.info("Updating database with new URLs", product_id=message.product_id)
             self.db_service.update_product_images(message.product_id, s3_urls)
             
-            # Tag the processed images
+            # Tag the processed images with GPT
             try:
-                self._update_current_stage("AI tagging processed images", message.product_id)
-                self._add_log_entry("INFO", message.product_id, "Starting AI tagging process")
-                logger.info("Tagging processed images", product_id=message.product_id)
+                self._update_current_stage("GPT tagging processed images", message.product_id)
+                self._add_log_entry("INFO", message.product_id, "Starting GPT tagging process")
+                logger.info("Tagging processed images with GPT", product_id=message.product_id)
                 
-                # Download processed images for tagging
-                processed_image_files = []
-                for i, processed_img in enumerate(processed_images):
-                    # Save image temporarily for tagging
-                    temp_path = f"/tmp/{message.product_id}_processed_{i}.jpg"
-                    processed_img.save(temp_path, "JPEG", quality=95)
-                    processed_image_files.append(temp_path)
+                # Get product name from database or use product ID
+                product_name = message.product_id  # You might want to fetch actual product name from DB
                 
-                # Run image tagger on processed images
-                tag_result = self.image_tagger.analyze_product(processed_image_files, message.product_id)
+                # Run GPT tagger on processed PIL images directly (no temp files needed)
+                tag_result = self.image_tagger.tag_product(
+                    images=processed_images,
+                    product_name=product_name,
+                    product_id=message.product_id
+                )
                 
-                if "error" not in tag_result:
-                    consensus = tag_result["consensus"]
-                    tags = consensus.get("comprehensive_tags", [])
-                    raw_gender = consensus.get("consensus_gender", "unisex")
-                    raw_category = consensus.get("consensus_category", "unknown")
-                    
-                    # Format for frontend display
-                    gender = self._format_gender(raw_gender)
-                    category = self._format_category(raw_category)
+                if not tag_result.error:
+                    # GPT tagger returns the exact format we need for the database
+                    tags = tag_result.tags
+                    gender = tag_result.gender
+                    category = tag_result.category
                     
                     # Update database with tags
                     self.db_service.update_product_tags(message.product_id, tags, gender, category)
                     self._add_log_entry("SUCCESS", message.product_id, f"Tagged: {category} | {gender} | {len(tags)} tags")
                     logger.info(
-                        "Product tagged successfully",
+                        "Product tagged successfully with GPT",
                         product_id=message.product_id,
                         tags=tags,
                         gender=gender,
-                        category=category
+                        category=category,
+                        processing_time=tag_result.processing_time
                     )
                 else:
-                    self._add_log_entry("ERROR", message.product_id, f"Tagging failed: {tag_result['error']}")
-                    logger.warning("Tagging failed", product_id=message.product_id, error=tag_result["error"])
-                
-                # Clean up temporary files
-                for temp_file in processed_image_files:
-                    if os.path.exists(temp_file):
-                        os.remove(temp_file)
+                    self._add_log_entry("ERROR", message.product_id, f"GPT tagging failed: {tag_result.error}")
+                    logger.warning("GPT tagging failed", product_id=message.product_id, error=tag_result.error)
                         
             except Exception as e:
                 self._add_log_entry("ERROR", message.product_id, f"Tagging error: {str(e)}")
