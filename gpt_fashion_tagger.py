@@ -23,6 +23,7 @@ class TaggingResult:
     gender: str
     category: str
     aesthetics: List[str]
+    suitable_image_indices: List[int]  # Which images are suitable for AI processing
     processing_time: float = 0.0
     error: Optional[str] = None
 
@@ -97,13 +98,16 @@ class GPTFashionTagger:
             # Build the prompt
             prompt_text = f"""Analyze this fashion product: "{product_name}"
 
+I'm providing {len(image_data)} images. Analyze the product overall and determine which individual images are suitable for AI processing.
+
 You must respond with ONLY valid JSON in this EXACT format (no extra text):
 
 {{
     "tags": ["tag1", "tag2", "tag3", "tag4", "tag5", "tag6", "tag7"],
     "gender": "Male|Female|Unisex",
     "category": "Main Category Name",
-    "aesthetics": ["aesthetic1", "aesthetic2", "aesthetic3"]
+    "aesthetics": ["aesthetic1", "aesthetic2", "aesthetic3"],
+    "image_suitability": [true, false, true]
 }}
 
 Rules:
@@ -111,6 +115,7 @@ Rules:
 - gender: exactly one of: "Male", "Female", "Unisex"
 - category: main category like "Hoodie", "Jeans", "Sneakers", "Dress", etc. (Title Case)
 - aesthetics: exactly 3 style aesthetics that describe this product (lowercase)
+- image_suitability: array of true/false for each image (in order) - whether that specific image is suitable for AI processing
 
 Gender Classification Guidelines:
 - Female: baby tee, crop top, mini skirt, dress, women's blouse, feminine cuts, typically women's sizing
@@ -123,7 +128,11 @@ Aesthetic Examples:
 - coquette, soft girl, clean girl, baddie, e-girl, academia, normcore, gorpcore
 - cyberpunk, steampunk, punk, emo, scene, hipster, sporty, elegant, edgy
 
-Focus on: style, fit, color, material, occasion, gender-specific design cues, and visual aesthetics
+AI Processing Suitability Guidelines (analyze each image individually):
+- SUITABLE: Clean product photos, white/neutral backgrounds, single clothing items, clear product shots, simple backgrounds
+- NOT SUITABLE: Complex scenes, multiple people, busy backgrounds, lifestyle photos, collages, text-heavy images, low quality images
+
+Focus on: style, fit, color, material, occasion, gender-specific design cues, visual aesthetics, and per-image composition/quality
 Response must be valid JSON only"""
 
             # Call GPT-5 nano API (using the new format you showed)
@@ -153,6 +162,7 @@ Response must be valid JSON only"""
             gender = result_data.get("gender", "Unisex")
             category = result_data.get("category", "Unknown")
             aesthetics = result_data.get("aesthetics", [])
+            image_suitability = result_data.get("image_suitability", [])
             
             # Ensure exactly 7 tags
             if len(tags) < 7:
@@ -175,6 +185,20 @@ Response must be valid JSON only"""
             if not category or category.lower() == "unknown":
                 category = "Apparel"
             
+            # Validate image suitability array
+            if len(image_suitability) != len(image_data):
+                logger.warning(
+                    "Image suitability array length mismatch", 
+                    product_id=product_id, 
+                    expected=len(image_data), 
+                    received=len(image_suitability)
+                )
+                # Default all images to suitable if array is wrong
+                image_suitability = [True] * len(image_data)
+            
+            # Convert to indices of suitable images
+            suitable_indices = [i for i, is_suitable in enumerate(image_suitability) if is_suitable]
+            
             processing_time = time.time() - start_time
             
             logger.info(
@@ -184,6 +208,8 @@ Response must be valid JSON only"""
                 gender=gender,
                 tag_count=len(tags),
                 aesthetic_count=len(aesthetics),
+                suitable_images=f"{len(suitable_indices)}/{len(image_data)}",
+                suitable_indices=suitable_indices,
                 processing_time=round(processing_time, 2)
             )
             
@@ -192,6 +218,7 @@ Response must be valid JSON only"""
                 gender=gender,
                 category=category,
                 aesthetics=aesthetics,
+                suitable_image_indices=suitable_indices,
                 processing_time=processing_time
             )
             
@@ -206,12 +233,14 @@ Response must be valid JSON only"""
                 processing_time=round(processing_time, 2)
             )
             
-            # Return fallback result
+            # Return fallback result - assume all images are suitable on error
+            num_images = len([img for img in images if img is not None]) if images else 1
             return TaggingResult(
                 tags=["fashion", "clothing", "apparel", "style", "trendy", "casual", "wear"],
                 gender="Unisex",
                 category="Apparel",
                 aesthetics=["minimalist", "casual", "modern"],
+                suitable_image_indices=list(range(num_images)),  # All images suitable on error
                 processing_time=processing_time,
                 error=error_msg
             )

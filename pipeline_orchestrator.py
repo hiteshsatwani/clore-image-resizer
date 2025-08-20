@@ -456,10 +456,11 @@ class PipelineOrchestrator:
                         gender = tag_result.gender
                         category = tag_result.category
                         aesthetics = tag_result.aesthetics
+                        suitable_indices = tag_result.suitable_image_indices
                         
                         # Update database with tags and aesthetics
                         self.db_service.update_product_tags(message.product_id, tags, gender, category, aesthetics)
-                        self._add_log_entry("SUCCESS", message.product_id, f"Tagged: {category} | {gender} | {len(tags)} tags | {len(aesthetics)} aesthetics")
+                        self._add_log_entry("SUCCESS", message.product_id, f"Tagged: {category} | {gender} | {len(tags)} tags | {len(aesthetics)} aesthetics | {len(suitable_indices)}/{len(all_downloaded_images)} suitable")
                         logger.info(
                             "Product tagged successfully with GPT",
                             product_id=message.product_id,
@@ -467,6 +468,7 @@ class PipelineOrchestrator:
                             gender=gender,
                             category=category,
                             aesthetics=aesthetics,
+                            suitable_images=f"{len(suitable_indices)}/{len(all_downloaded_images)}",
                             processing_time=tag_result.processing_time
                         )
                     else:
@@ -480,33 +482,40 @@ class PipelineOrchestrator:
                 self._add_log_entry("ERROR", message.product_id, f"Tagging error: {str(e)}")
                 logger.error("Error during tagging", product_id=message.product_id, error=str(e))
             
-            # Now continue with image filtering for AI processing (separate from tagging)
-            # Filter out failed downloads and check for white background product images
-            self._update_current_stage("Filtering product images", message.product_id)
+            # Now filter images for AI processing based on GPT's per-image analysis
+            self._update_current_stage("Selecting images for AI processing", message.product_id)
             valid_images = []
             valid_urls = []
-            suitable_count = 0
             
-            for i, (img, url) in enumerate(zip(downloaded_images, product.images)):
-                self._update_detailed_progress(f"Analyzing image", i + 1, len(downloaded_images))
-                
-                if img is not None:
-                    # Check if this is a simple product image with white background
-                    if self.image_resizer.is_simple_product_image(img):
+            # Use GPT's suitability decisions if available, otherwise use all downloaded images
+            if 'suitable_indices' in locals() and not tag_result.error:
+                # Use GPT's per-image decisions
+                for i, (img, url) in enumerate(zip(downloaded_images, product.images)):
+                    if img is not None and i in suitable_indices:
                         valid_images.append(img)
                         valid_urls.append(url)
-                        suitable_count += 1
-                        self._add_log_entry("SUCCESS", message.product_id, f"Image {i+1} accepted - simple product with white background")
-                        logger.info("Image accepted for processing", url=url[:100], product_id=message.product_id)
+                        self._add_log_entry("SUCCESS", message.product_id, f"Image {i+1} selected by GPT for AI processing")
+                        logger.info("Image selected by GPT for AI processing", url=url[:100], product_id=message.product_id)
+                    elif img is not None:
+                        self._add_log_entry("INFO", message.product_id, f"Image {i+1} not suitable for AI processing (per GPT)")
+                        logger.info("Image not suitable for AI processing per GPT", url=url[:100], product_id=message.product_id)
                     else:
-                        self._add_log_entry("WARN", message.product_id, f"Image {i+1} rejected - complex or no white background")
-                        logger.info("Image skipped - not a simple product image", url=url[:100], product_id=message.product_id)
-                else:
-                    self._add_log_entry("ERROR", message.product_id, f"Image {i+1} download failed")
-                    logger.warning("Failed to download image", url=url)
+                        self._add_log_entry("ERROR", message.product_id, f"Image {i+1} download failed")
+                        logger.warning("Failed to download image", url=url)
+            else:
+                # Fallback: use all downloaded images if GPT analysis failed
+                self._add_log_entry("WARN", message.product_id, "Using all images as fallback (GPT analysis failed)")
+                for i, (img, url) in enumerate(zip(downloaded_images, product.images)):
+                    if img is not None:
+                        valid_images.append(img)
+                        valid_urls.append(url)
+                    else:
+                        self._add_log_entry("ERROR", message.product_id, f"Image {i+1} download failed")
+                        logger.warning("Failed to download image", url=url)
             
             if not valid_images:
-                error_msg = f"No suitable product images found (downloaded: {len([img for img in downloaded_images if img is not None])}, suitable: {suitable_count})"
+                downloaded_count = len([img for img in downloaded_images if img is not None])
+                error_msg = f"No suitable images for AI processing (downloaded: {downloaded_count}, suitable: {len(valid_images)})"
                 self._add_log_entry("WARN", message.product_id, f"Product skipped - {error_msg}")
                 logger.warning(error_msg, product_id=message.product_id)
                 

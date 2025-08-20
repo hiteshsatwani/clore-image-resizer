@@ -13,9 +13,7 @@ from typing import Tuple
 import torch
 from PIL import Image, ImageFilter
 from diffusers import StableDiffusionXLInpaintPipeline
-from transformers import pipeline
 import numpy as np
-from scipy import ndimage
 
 
 class ImageResizer:
@@ -35,9 +33,6 @@ class ImageResizer:
         # Enable memory efficient attention
         self.inpaint_pipeline.enable_model_cpu_offload()
         self.inpaint_pipeline.enable_vae_slicing()
-        
-        # For content-aware fill detection
-        self.depth_estimator = pipeline("depth-estimation", model="Intel/dpt-large", device=device)
         
         print("Models loaded successfully!")
     
