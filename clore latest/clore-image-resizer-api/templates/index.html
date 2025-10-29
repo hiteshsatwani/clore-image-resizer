@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clore Image Resizer - 9:16 AI Enhancement</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .badge {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+
+        .upload-zone {
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #f8f9ff;
+            margin-bottom: 20px;
+        }
+
+        .upload-zone:hover {
+            border-color: #764ba2;
+            background: #f0f2ff;
+        }
+
+        .upload-zone.dragover {
+            border-color: #764ba2;
+            background: #e8ebff;
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        .upload-text {
+            color: #333;
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .upload-hint {
+            color: #999;
+            font-size: 13px;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .preview-section {
+            display: none;
+            margin-bottom: 20px;
+        }
+
+        .preview-section.show {
+            display: block;
+        }
+
+        .preview-label {
+            font-size: 12px;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .preview-image {
+            width: 100%;
+            max-height: 300px;
+            object-fit: contain;
+            border-radius: 8px;
+            background: #f0f0f0;
+            margin-bottom: 12px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        .spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 12px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .status-message {
+            text-align: center;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status-message.show {
+            display: block;
+        }
+
+        .status-message.info {
+            background: #e3f2fd;
+            color: #1976d2;
+            border-left: 4px solid #1976d2;
+            text-align: left;
+        }
+
+        .status-message.success {
+            background: #e8f5e9;
+            color: #388e3c;
+            border-left: 4px solid #388e3c;
+        }
+
+        .status-message.error {
+            background: #ffebee;
+            color: #d32f2f;
+            border-left: 4px solid #d32f2f;
+        }
+
+        .comparison-section {
+            display: none;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+
+        .comparison-section.show {
+            display: block;
+        }
+
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .comparison-item {
+            text-align: center;
+        }
+
+        .comparison-item-label {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 6px;
+        }
+
+        .comparison-item img {
+            width: 100%;
+            border-radius: 6px;
+            background: #f0f0f0;
+        }
+
+        .info-box {
+            background: #f8f9ff;
+            border-left: 4px solid #667eea;
+            padding: 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #555;
+            margin-top: 20px;
+        }
+
+        .info-box strong {
+            color: #333;
+        }
+
+        .aspect-ratio {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 12px;
+            margin: 0 4px;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+
+            .header h1 {
+                font-size: 22px;
+            }
+
+            .upload-zone {
+                padding: 30px 15px;
+            }
+
+            .comparison-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✨ Clore Image Resizer</h1>
+            <p>Transform your product images to <span class="aspect-ratio">9:16</span> format</p>
+            <span class="badge">AI-Powered</span>
+        </div>
+
+        <div class="status-message" id="statusMessage"></div>
+
+        <div class="upload-zone" id="uploadZone">
+            <div class="upload-icon">📸</div>
+            <div class="upload-text">Drop image here</div>
+            <div class="upload-hint">or click to browse (JPG, PNG, WebP)</div>
+            <input type="file" id="fileInput" accept="image/*">
+        </div>
+
+        <div class="preview-section" id="previewSection">
+            <span class="preview-label">Selected Image</span>
+            <img id="previewImage" class="preview-image" alt="preview">
+        </div>
+
+        <div class="spinner" id="spinner"></div>
+
+        <div class="button-group">
+            <button class="btn-primary" id="processBtn">Process Image</button>
+            <button class="btn-secondary" id="resetBtn">Reset</button>
+        </div>
+
+        <div class="comparison-section" id="comparisonSection">
+            <h3 style="font-size: 14px; margin-bottom: 12px;">Results</h3>
+            <div class="comparison-grid">
+                <div class="comparison-item">
+                    <div class="comparison-item-label">Original</div>
+                    <img id="originalImage" alt="original">
+                </div>
+                <div class="comparison-item">
+                    <div class="comparison-item-label">Resized (9:16)</div>
+                    <img id="resizedImage" alt="resized">
+                </div>
+            </div>
+        </div>
+
+        <div class="info-box">
+            <strong>💡 How it works:</strong> Our AI intelligently extends your image to <span class="aspect-ratio">9:16</span> format, perfect for mobile and social media. The original product is preserved, and extensions are AI-generated.
+        </div>
+    </div>
+
+    <script>
+        const uploadZone = document.getElementById('uploadZone');
+        const fileInput = document.getElementById('fileInput');
+        const previewSection = document.getElementById('previewSection');
+        const previewImage = document.getElementById('previewImage');
+        const processBtn = document.getElementById('processBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const spinner = document.getElementById('spinner');
+        const statusMessage = document.getElementById('statusMessage');
+        const comparisonSection = document.getElementById('comparisonSection');
+        const originalImage = document.getElementById('originalImage');
+        const resizedImage = document.getElementById('resizedImage');
+
+        let selectedFile = null;
+
+        // Upload zone click
+        uploadZone.addEventListener('click', () => fileInput.click());
+
+        // File input change
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (file) handleFileSelect(file);
+        });
+
+        // Drag and drop
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('dragover');
+        });
+
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            const file = e.dataTransfer?.files?.[0];
+            if (file) handleFileSelect(file);
+        });
+
+        function handleFileSelect(file) {
+            // Validate file type
+            if (!file.type.startsWith('image/')) {
+                showStatus('Please select a valid image file', 'error');
+                return;
+            }
+
+            // Validate file size (max 50MB)
+            if (file.size > 50 * 1024 * 1024) {
+                showStatus('File too large. Maximum 50MB allowed.', 'error');
+                return;
+            }
+
+            selectedFile = file;
+            previewSection.classList.add('show');
+            comparisonSection.classList.remove('show');
+
+            // Show preview
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                previewImage.src = e.target?.result;
+            };
+            reader.readAsDataURL(file);
+
+            // Update upload zone
+            uploadZone.innerHTML = `<div style="color: #667eea;"><strong>✓ Image selected</strong></div>`;
+            uploadZone.style.borderColor = '#667eea';
+            uploadZone.style.background = '#f8f9ff';
+
+            showStatus('Ready to process. Click "Process Image" to start.', 'info');
+        }
+
+        // Process button
+        processBtn.addEventListener('click', async () => {
+            if (!selectedFile) {
+                showStatus('Please select an image first', 'error');
+                return;
+            }
+
+            await processImage();
+        });
+
+        // Reset button
+        resetBtn.addEventListener('click', () => {
+            selectedFile = null;
+            fileInput.value = '';
+            previewSection.classList.remove('show');
+            comparisonSection.classList.remove('show');
+            statusMessage.classList.remove('show');
+            uploadZone.innerHTML = `
+                <div class="upload-icon">📸</div>
+                <div class="upload-text">Drop image here</div>
+                <div class="upload-hint">or click to browse (JPG, PNG, WebP)</div>
+            `;
+            uploadZone.style.borderColor = '#667eea';
+            uploadZone.style.background = '#f8f9ff';
+        });
+
+        async function processImage() {
+            if (!selectedFile) return;
+
+            try {
+                // Prepare form data
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+
+                // Show processing state
+                processBtn.disabled = true;
+                spinner.style.display = 'block';
+                showStatus('Processing your image with AI... This may take a moment.', 'info');
+
+                // Send to server
+                const response = await fetch('/resize', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to process image');
+                }
+
+                // Get resized image
+                const blob = await response.blob();
+                const resizedUrl = URL.createObjectURL(blob);
+
+                // Show results
+                originalImage.src = previewImage.src;
+                resizedImage.src = resizedUrl;
+                comparisonSection.classList.add('show');
+
+                // Create download link
+                const downloadLink = document.createElement('a');
+                downloadLink.href = resizedUrl;
+                downloadLink.download = `${selectedFile.name.split('.')[0]}_resized.png`;
+
+                // Show success with download button
+                showStatus('✨ Image processed successfully!', 'success');
+
+                // Add download button to button group
+                const buttonGroup = document.querySelector('.button-group');
+                const existingDownload = document.getElementById('downloadBtn');
+                if (existingDownload) existingDownload.remove();
+
+                const downloadBtn = document.createElement('button');
+                downloadBtn.id = 'downloadBtn';
+                downloadBtn.className = 'btn-primary';
+                downloadBtn.style.gridColumn = '1 / -1';
+                downloadBtn.textContent = '⬇️ Download Resized Image';
+                downloadBtn.onclick = () => downloadLink.click();
+                buttonGroup.insertBefore(downloadBtn, buttonGroup.firstChild);
+
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus(`Error: ${error.message}`, 'error');
+            } finally {
+                processBtn.disabled = false;
+                spinner.style.display = 'none';
+            }
+        }
+
+        function showStatus(message, type) {
+            statusMessage.textContent = message;
+            statusMessage.className = `status-message show ${type}`;
+        }
+
+        // Check API status on load
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch('/health');
+                if (!response.ok) {
+                    showStatus('⚠️ Service is initializing. Please wait...', 'info');
+                }
+            } catch (error) {
+                console.error('Health check failed:', error);
+            }
+        });
+    </script>
+</body>
+</html>

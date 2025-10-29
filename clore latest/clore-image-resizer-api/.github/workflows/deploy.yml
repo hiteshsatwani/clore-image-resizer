@@ -1,0 +1,80 @@
+name: Build and Deploy Image Resizer
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY_NAME: cloreregistry
+  IMAGE_NAME: clore-image-resizer
+  CONTAINER_APP_NAME: clore-api-resizer
+  CONTAINER_APP_ENV: clore-env-private
+  RESOURCE_GROUP: clore-prod-rg
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest .
+          echo "Docker image built successfully"
+
+      - name: Login to Azure Container Registry
+        run: |
+          az acr login --name ${{ env.REGISTRY_NAME }}
+
+      - name: Push image to ACR
+        run: |
+          docker push ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+          echo "Image pushed to ACR successfully"
+
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --output none
+          echo "Container app updated successfully"
+
+      - name: Verify deployment
+        run: |
+          # Wait for deployment to stabilize
+          sleep 10
+
+          # Get container app details
+          az containerapp show \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query "{name:name, state:properties.provisioningState, latestRevision:properties.latestRevisionName}" \
+            -o json
+
+      - name: Output deployment info
+        run: |
+          echo "✅ Deployment completed successfully!"
+          echo ""
+          echo "Container App: ${{ env.CONTAINER_APP_NAME }}"
+          echo "Resource Group: ${{ env.RESOURCE_GROUP }}"
+          echo "Image: ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo ""
+          echo "To check the deployment status, run:"
+          echo "az containerapp show --name ${{ env.CONTAINER_APP_NAME }} --resource-group ${{ env.RESOURCE_GROUP }}"

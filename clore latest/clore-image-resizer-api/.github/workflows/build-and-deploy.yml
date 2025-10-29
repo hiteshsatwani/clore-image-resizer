@@ -1,0 +1,57 @@
+name: Build and Deploy Image Resizer
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: cloreregistry.azurecr.io
+  IMAGE_NAME: clore-image-resizer
+  CONTAINER_APP_NAME: clore-api-resizer-gpu
+  RESOURCE_GROUP: clore-prod-rg
+  REGION: uksouth
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build and push image to ACR
+        run: |
+          az acr build \
+            --registry cloreregistry \
+            --image ${{ env.IMAGE_NAME }}:latest \
+            --image ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --file Dockerfile .
+
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            --set-env-vars HF_TOKEN=${{ secrets.HF_TOKEN }}
+
+      - name: Wait for deployment
+        run: sleep 15
+
+      - name: Health check
+        run: |
+          FQDN=$(az containerapp show \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query properties.configuration.ingress.fqdn -o tsv)
+
+          echo "Container App FQDN: $FQDN"
+
+          curl -s https://${FQDN}/health | jq .
