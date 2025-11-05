@@ -37,25 +37,24 @@ class ImageResizer:
         try:
             hf_token = os.getenv("HF_TOKEN")
 
-            # Load base transformer
+            # Load base transformer from FLUX.1-dev
             transformer = FluxTransformer2DModel.from_pretrained(
-                "black-forest-labs/FLUX.1-Fill-dev",
+                "black-forest-labs/FLUX.1-dev",
                 subfolder="transformer",
                 torch_dtype=torch.bfloat16,
                 token=hf_token
             )
 
-            # Load ControlNet
+            # Load ControlNet from Alimama (matches multimodalart implementation)
             controlnet = FluxControlNetModel.from_pretrained(
-                "black-forest-labs/FLUX.1-Fill-dev",
-                subfolder="controlnet",
+                "alimama-creative/FLUX.1-dev-Controlnet-Inpainting-Alpha",
                 torch_dtype=torch.bfloat16,
                 token=hf_token
             )
 
-            # Load full pipeline
+            # Load full pipeline from FLUX.1-dev base
             self.pipe = FluxControlNetInpaintingPipeline.from_pretrained(
-                "black-forest-labs/FLUX.1-Fill-dev",
+                "black-forest-labs/FLUX.1-dev",
                 transformer=transformer,
                 controlnet=controlnet,
                 torch_dtype=torch.bfloat16,
