@@ -91,6 +91,119 @@ async def health_check():
     }
 
 
+@app.post("/process-queue")
+async def process_queue_endpoint():
+    """
+    Manually trigger queue processing.
+    Fetches all messages from queue and processes until empty.
+
+    Usage: POST https://api.clore.app/process-queue
+    """
+    try:
+        from azure.storage.queue import QueueClient
+
+        # Try both AzureWebJobsStorage and AZURE_STORAGE_CONNECTION_STRING
+        connection_string = os.getenv("AzureWebJobsStorage") or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+        queue_name = os.getenv("QUEUE_NAME", "image-processing-queue")
+
+        if not connection_string:
+            raise HTTPException(status_code=500, detail="Storage connection string not configured")
+
+        queue_client = QueueClient.from_connection_string(connection_string, queue_name=queue_name)
+
+        total_processed = 0
+        total_failed = 0
+        results = {"batches": []}
+
+        print(f"🚀 Starting queue processing from {queue_name}")
+
+        # Keep processing until queue is empty
+        while True:
+            # Get batch of up to 10 messages
+            messages = list(queue_client.receive_messages(max_messages=10, visibility_timeout=600))
+
+            if not messages:
+                print("✅ Queue is now empty")
+                break
+
+            product_ids = []
+            message_refs = []
+
+            # Extract product IDs
+            for msg in messages:
+                try:
+                    import base64
+
+                    content = msg.content
+
+                    # Try to decode base64 first (queue messages are base64 encoded)
+                    try:
+                        decoded = base64.b64decode(content).decode('utf-8')
+                        msg_data = json.loads(decoded)
+                        product_id = msg_data.get("product_id") or msg_data.get("productId")
+                    except:
+                        # If not base64, try direct JSON parsing
+                        if content.startswith('{'):
+                            msg_data = json.loads(content)
+                            product_id = msg_data.get("product_id") or msg_data.get("productId")
+                        else:
+                            product_id = content
+
+                    if product_id:
+                        product_ids.append(product_id)
+                        message_refs.append((msg.id, msg.pop_receipt))
+                except Exception as e:
+                    print(f"⚠️  Failed to parse message: {e}")
+
+            # Process batch
+            if product_ids:
+                print(f"📦 Processing batch of {len(product_ids)} products...")
+
+                try:
+                    # Call internal /process-batch endpoint
+                    import httpx
+                    async with httpx.AsyncClient(timeout=3600.0) as client:
+                        response = await client.post(
+                            "http://localhost:8000/process-batch",
+                            json={"product_ids": product_ids}
+                        )
+
+                        if response.status_code == 200:
+                            result = response.json()
+                            results["batches"].append(result)
+                            total_processed += result.get("successful", 0)
+                            total_failed += result.get("failed", 0)
+
+                            # Delete processed messages
+                            for msg_id, pop_receipt in message_refs:
+                                try:
+                                    queue_client.delete_message(msg_id, pop_receipt)
+                                except:
+                                    pass
+
+                            print(f"✅ Batch complete: {result['successful']}/{result['total']} successful")
+                        else:
+                            print(f"❌ Batch failed: {response.status_code}")
+                            total_failed += len(product_ids)
+
+                except Exception as e:
+                    print(f"❌ Error processing batch: {e}")
+                    total_failed += len(product_ids)
+
+        results["summary"] = {
+            "total_processed": total_processed,
+            "total_failed": total_failed,
+            "status": "completed"
+        }
+
+        return results
+
+    except Exception as e:
+        import traceback
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        print(f"❌ Queue processing error: {error_msg}")
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @app.websocket("/ws/dashboard")
