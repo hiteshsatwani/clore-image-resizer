@@ -1,45 +1,64 @@
-"""FastAPI backend for AI-powered 9:16 image resizer."""
+"""FastAPI backend for GPT-powered image tagging and recommendations."""
 
 import io
 import os
-import tempfile
+import sys
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
-import torch
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
+import requests
+from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, WebSocket, Body
+from fastapi.responses import HTMLResponse
 from PIL import Image
 
-from image_resizer import ImageResizer
+# Import batch processing services
+try:
+    from services.gpt_tagger_service import get_tagger
+    from services.graphql_client_service import get_graphql_client
+    print("✓ Batch processing services imported successfully")
+except Exception as e:
+    print(f"⚠️  Batch processing import warning: {e}")
+
+print("🚀 Initializing Clore Image Tagging & Recommendation API...")
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Clore Image Resizer",
-    description="AI-powered image resizer to 9:16 aspect ratio",
+    title="Clore Image Tagging & Recommendations",
+    description="GPT-powered image tagging and product recommendations",
     version="1.0.0"
 )
+print("✓ FastAPI app created")
 
-# Initialize image resizer on startup
-resizer: Optional[ImageResizer] = None
+# Pydantic models
+class ProcessBatchRequest(BaseModel):
+    product_ids: List[str]
 
-# Determine device
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"🔧 Using device: {DEVICE}")
+# WebSocket connection manager for dashboard
+active_connections: set = set()
 
 
-def initialize_resizer():
-    """Lazy load the image resizer (called on first request)."""
-    global resizer
-    if resizer is None:
+async def broadcast_message(level: str, product_id: str, message: str):
+    """Broadcast a message to all connected dashboard clients."""
+    msg_data = {
+        "level": level,
+        "product_id": product_id,
+        "message": message
+    }
+    disconnected = set()
+
+    for connection in active_connections:
         try:
-            print("📦 Loading AI model (this may take 2-5 minutes on first run)...")
-            resizer = ImageResizer(device=DEVICE)
-            print("✅ AI model loaded successfully!")
+            await connection.send_json(msg_data)
         except Exception as e:
-            print(f"❌ Failed to load AI model: {e}")
-            raise
+            print(f"⚠️  Failed to send websocket message: {e}")
+            disconnected.add(connection)
+
+    # Remove disconnected clients
+    active_connections.difference_update(disconnected)
+
+
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -60,131 +79,193 @@ async def serve_homepage():
         """
 
 
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
-        "device": DEVICE,
-        "model_loaded": resizer is not None,
-        "cuda_available": torch.cuda.is_available()
+        "service": "GPT Image Tagging & Recommendations",
+        "gpu_required": False
     }
 
 
-@app.post("/resize")
-async def resize_image(file: UploadFile = File(...)):
-    """
-    Resize image to 9:16 aspect ratio.
 
-    Accepts image files (jpg, png, webp, etc.)
-    Returns resized image as PNG.
-    """
-    # Lazy load model on first request
-    initialize_resizer()
 
-    # Validate file
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=400,
-            detail="Please upload a valid image file (jpg, png, webp, etc.)"
-        )
+@app.websocket("/ws/dashboard")
+async def websocket_dashboard(websocket: WebSocket):
+    """WebSocket endpoint for real-time dashboard updates."""
+    await websocket.accept()
+    active_connections.add(websocket)
+    print(f"📊 Dashboard client connected. Active connections: {len(active_connections)}")
 
     try:
-        # Read uploaded file
-        contents = await file.read()
+        # Keep the connection alive
+        while True:
+            data = await websocket.receive_text()
+            # Clients can send ping messages to stay connected
+            if data == "ping":
+                await websocket.send_text("pong")
+    except Exception as e:
+        print(f"⚠️  WebSocket error: {e}")
+    finally:
+        active_connections.discard(websocket)
+        print(f"📊 Dashboard client disconnected. Active connections: {len(active_connections)}")
 
-        # Validate file size (max 50MB)
-        if len(contents) > 50 * 1024 * 1024:
-            raise HTTPException(
-                status_code=413,
-                detail="File too large. Maximum 50MB allowed."
-            )
 
-        # Open image
-        input_image = Image.open(io.BytesIO(contents))
+@app.post("/process-batch")
+async def process_batch(request: ProcessBatchRequest):
+    """
+    Process a batch of products for image tagging and recommendations.
 
-        # Validate image dimensions
-        width, height = input_image.size
-        if width < 100 or height < 100:
-            raise HTTPException(
-                status_code=400,
-                detail="Image too small. Minimum 100x100 pixels required."
-            )
+    Fetches product images, runs GPT tagging, and generates AI recommendations.
+    No GPU required - uses OpenAI and GPT services for analysis.
 
-        if width > 8000 or height > 8000:
-            raise HTTPException(
-                status_code=400,
-                detail="Image too large. Maximum 8000x8000 pixels."
-            )
+    Args:
+        product_ids: List of product IDs to process
 
-        # Create temporary files
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_input:
-            input_path = tmp_input.name
-            input_image.save(input_path, "PNG")
+    Returns:
+        Tagging and recommendation results for each product
+    """
+    if not request.product_ids:
+        raise HTTPException(status_code=400, detail="No product IDs provided")
 
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_output:
-            output_path = tmp_output.name
+    try:
+        tagger = get_tagger()
+        graphql_client = get_graphql_client()
 
-        try:
-            # Process image
-            print(f"🔄 Processing image: {file.filename} ({width}x{height})")
-            success = resizer.resize_image(input_path, output_path)
+        results = {
+            "total": len(request.product_ids),
+            "successful": 0,
+            "failed": 0,
+            "products": {}
+        }
 
-            if not success:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to process image. The image may be too complex."
+        for product_id in request.product_ids:
+            try:
+                print(f"🔄 Processing product: {product_id}")
+                await broadcast_message("info", product_id, f"Starting to process product {product_id}")
+
+                # Get product images via GraphQL query
+                try:
+                    print(f"  🔍 Fetching product images from GraphQL...")
+                    images = await graphql_client.get_product_images(product_id)
+                    if not images:
+                        print(f"  ⚠️  No images found for product")
+                        results["products"][product_id] = {
+                            "status": "failed",
+                            "error": "No images found"
+                        }
+                        results["failed"] += 1
+                        continue
+                except Exception as e:
+                    print(f"  ⚠️  Failed to fetch product images: {e}")
+                    results["products"][product_id] = {
+                        "status": "failed",
+                        "error": f"Failed to fetch images: {str(e)}"
+                    }
+                    results["failed"] += 1
+                    continue
+
+                print(f"  📥 Downloaded {len(images)} images")
+
+                # Download images
+                downloaded_images = []
+                for i, img_url in enumerate(images):
+                    try:
+                        response = requests.get(img_url, timeout=10)
+                        if response.status_code == 200:
+                            img = Image.open(io.BytesIO(response.content))
+                            downloaded_images.append(img.convert("RGB"))
+                    except Exception as e:
+                        print(f"  ⚠️  Failed to download image {i+1}: {e}")
+
+                if not downloaded_images:
+                    results["products"][product_id] = {
+                        "status": "failed",
+                        "error": "Failed to download images"
+                    }
+                    results["failed"] += 1
+                    continue
+
+                # Run GPT tagging
+                print(f"  🤖 Running GPT tagger...")
+                await broadcast_message("info", product_id, "Running GPT tagger...")
+                tag_result = tagger.tag_product(
+                    images=downloaded_images,
+                    product_name=f"Product {product_id}",
+                    product_id=product_id
                 )
 
-            # Return resized image
-            print(f"✅ Successfully resized: {file.filename}")
-            return FileResponse(
-                output_path,
-                media_type="image/png",
-                filename=f"{Path(file.filename).stem}_resized.png"
-            )
+                if not tag_result.error:
+                    # Update database with tags via GraphQL
+                    tag_update_success = await graphql_client.update_product_metadata(
+                        product_id=product_id,
+                        tags=tag_result.tags,
+                        gender=tag_result.gender,
+                        category=tag_result.category,
+                        aesthetics=tag_result.aesthetics
+                    )
+                    if tag_update_success:
+                        category_name = tag_result.category.get('specific')
+                        await broadcast_message("success", product_id, f"Tagged: {category_name}")
+                        print(f"  ✓ Tagged: {category_name}")
+                    else:
+                        print(f"  ⚠️  Failed to update product tags")
 
-        finally:
-            # Clean up input file (output will be cleaned up by FastAPI)
-            try:
-                os.unlink(input_path)
-            except:
-                pass
+                results["products"][product_id] = {
+                    "status": "success",
+                    "category": tag_result.category.get("specific"),
+                    "gender": tag_result.gender,
+                    "aesthetics": tag_result.aesthetics,
+                    "tags": tag_result.tags,
+                    "total_images": len(downloaded_images)
+                }
+                results["successful"] += 1
 
-    except HTTPException:
-        raise
+                # Broadcast final product stats
+                await broadcast_message("stats", product_id, {
+                    "status": "completed",
+                    "category": tag_result.category.get("specific"),
+                    "gender": tag_result.gender,
+                    "total_images": len(downloaded_images),
+                    "progress_percent": 100
+                })
+
+                await broadcast_message("success", product_id, f"✅ Completed: Tagged with {tag_result.category.get('specific')}")
+                print(f"✅ Completed product: {product_id} - Tagged successfully")
+
+            except Exception as e:
+                print(f"❌ Error processing {product_id}: {e}")
+                await broadcast_message("error", product_id, f"Error: {str(e)}")
+                results["products"][product_id] = {
+                    "status": "failed",
+                    "error": str(e)
+                }
+                results["failed"] += 1
+
+        return results
+
     except Exception as e:
-        print(f"❌ Error processing image: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing image: {str(e)}"
-        )
+        print(f"❌ Batch processing error: {e}")
+        raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
 
 
 @app.get("/status")
 async def get_status():
     """Get current service status."""
-    try:
-        if torch.cuda.is_available():
-            gpu_memory = torch.cuda.get_device_properties(0).total_memory
-            gpu_memory_gb = gpu_memory / (1024**3)
-            return {
-                "status": "ready",
-                "device": DEVICE,
-                "gpu_memory_gb": gpu_memory_gb,
-                "model_loaded": resizer is not None
-            }
-        else:
-            return {
-                "status": "ready",
-                "device": "cpu",
-                "model_loaded": resizer is not None
-            }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+    return {
+        "status": "ready",
+        "service": "GPT Image Tagging & Recommendations",
+        "gpu_required": False,
+        "capabilities": [
+            "Image tagging with GPT vision",
+            "Product category classification",
+            "Gender and aesthetic analysis",
+            "AI-powered recommendations"
+        ]
+    }
 
 
 if __name__ == "__main__":
@@ -196,5 +277,5 @@ if __name__ == "__main__":
     # Determine host - bind to 0.0.0.0 for Azure deployments
     host = "0.0.0.0"
 
-    print(f"🚀 Starting Clore Image Resizer API on {host}:{port}")
+    print(f"🚀 Starting Clore Image Tagging & Recommendation API on {host}:{port}")
     uvicorn.run(app, host=host, port=port)
